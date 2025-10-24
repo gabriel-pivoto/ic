@@ -27,7 +27,7 @@ MSIGN_NAME  = 'm';
 M_PLUS      = '1';
 M_MINUS     = '-1';
 
-% ---- RESULT TABLE TAGS (must exist in model; will be created if missing)
+% ---- RESULT TABLE TAGS (will be created if missing)
 RPLUS_TABLE_TAG  = 'tblRplus';
 RMINUS_TABLE_TAG = 'tblRminus';
 
@@ -59,7 +59,7 @@ fine_Ldom_delta  = 10;   fine_Ldom_step  = 5;
 fine_Lden_delta  = 10;   fine_Lden_step  = 5;
 fine_hsi_delta   = 5;    fine_hsi_step   = 5;
 
-% SUPERFINE (counts do not depend on seed position -> exact upfront)
+% SUPERFINE (exact upfront)
 super_hau_delta  = 1;    super_hau_step  = 0.5;
 super_hcey_delta = 2;    super_hcey_step = 1;
 super_Ldom_delta = 4;    super_Ldom_step = 2;
@@ -82,7 +82,7 @@ ModelUtil.showProgress(true);
 t0 = tic;                            % global clock
 runs_done_global = 0;
 is_total_exact   = false;            % start with estimate
-grand_total_target = NaN;            % estimated first, exact later
+grand_total_target = NaN; %#ok<NASGU>  % estimated first, exact later
 
 % ---- COARSE (exact) ----
 nL = numel(Ldomain_grid_nm);
@@ -232,7 +232,7 @@ stage_total_runs = fine_total_runs;
 stage_t0 = tic;
 
 for s = 1:height(seeds)
-    a0 = seeds.alpha_at_peak_deg(s);
+    a0 = seeds.alpha_at_peak_deg(s); %#ok<NASGU> % not used now, full-alpha sweep
 
     Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
     Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
@@ -240,7 +240,8 @@ for s = 1:height(seeds)
     Dlist = max(min(ldente_grid_nm),  seeds.l_dente_nm(s) - fine_Lden_delta) : fine_Lden_step : min(max(ldente_grid_nm),  seeds.l_dente_nm(s) + fine_Lden_delta);
     Slist = max(min(hsi_grid_nm),     seeds.h_si_nm(s)    - fine_hsi_delta)  : fine_hsi_step  : min(max(hsi_grid_nm),     seeds.h_si_nm(s)    + fine_hsi_delta);
 
-    aStart = max(0, a0 - 0.6); aStop  = min(89, a0 + 0.6);
+    % --- FULL-ALPHA SWEEP (0:0.01:89) ---
+    aStart = 0; aStop = 89;
 
     for iL = 1:numel(Llist)
         setParamNm(model, PARAM_LDOM, Llist(iL));
@@ -322,7 +323,7 @@ stage_total_runs = super_total_runs;
 stage_t0 = tic;
 
 for s = 1:height(seedsSuper)
-    a0 = seedsSuper.alpha_at_peak_deg(s);
+    a0 = seedsSuper.alpha_at_peak_deg(s); %#ok<NASGU>
 
     Hlist = (seedsSuper.h_au_nm(s)    - super_hau_delta)  : super_hau_step  : (seedsSuper.h_au_nm(s)    + super_hau_delta);
     Glist = (seedsSuper.h_ceyig_nm(s) - super_hcey_delta) : super_hcey_step : (seedsSuper.h_ceyig_nm(s) + super_hcey_delta);
@@ -330,8 +331,8 @@ for s = 1:height(seedsSuper)
     Dlist = (seedsSuper.l_dente_nm(s) - super_Lden_delta) : super_Lden_step : (seedsSuper.l_dente_nm(s) + super_Lden_delta);
     Slist = (seedsSuper.h_si_nm(s)    - super_hsi_delta)  : super_hsi_step  : (seedsSuper.h_si_nm(s)    + super_hsi_delta);
 
-    aStart = max(0, a0 - 0.15);
-    aStop  = min(89, a0 + 0.15);
+    % --- FULL-ALPHA SWEEP (0:0.01:89) ---
+    aStart = 0; aStop = 89;
 
     for iL = 1:numel(Llist)
         setParamNm(model, PARAM_LDOM, Llist(iL));
@@ -409,7 +410,7 @@ setParamNm(model, PARAM_HAU,  hau_best);
 
 runs_done_global = runs_done_global + 2;
 
-[pkV, kV]   = max(abs(TM_dense));
+[~, kV]   = max(abs(TM_dense));   % removed pkV (unused)
 alpha_best  = a_dense(kV);
 tmoke_best  = TM_dense(kV);
 
@@ -516,7 +517,7 @@ function setParamNm(mdl, name, val_nm)
 end
 
 function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
-    mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mPlusStr, mMinusStr, ttagPlus, ttagMinus, varargin)
+    mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mPlusStr, mMinusStr, ttagPlus, ttagMinus)
     % Run α sweep for m=+1 (-> ttagPlus) and m=-1 (-> ttagMinus).
     % Each table is CLEARED before run; columns are detected by header names.
     ensureTable(mdl, ttagPlus);
@@ -607,40 +608,62 @@ function redirectAllNumericalsToTable(mdl, ttag)
 end
 
 function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
-    % Reads last Npts rows from a named table; detects columns by header.
+    % Lê as últimas Npts linhas da tabela 'ttag'.
+    % Tenta detectar colunas por cabeçalho; se não houver, usa fallback (1=alpha, 2=R).
+
     S = mphtable(mdl, ttag);
 
+    % 1) Heads robustos (várias chaves possíveis em versões diferentes)
     heads = [];
-    try, heads = string(S.colhead); catch, end
-    if isempty(heads), try, heads = string(S.head); catch, end
-    if isempty(heads), try, heads = string(S.colnames); catch, end
-    assert(~isempty(heads), 'Cannot read table headers for %s.', ttag);
+    if isfield(S,'colhead') && ~isempty(S.colhead), heads = string(S.colhead); end
+    if isempty(heads) && isfield(S,'head') && ~isempty(S.head), heads = string(S.head); end
+    if isempty(heads) && isfield(S,'header') && ~isempty(S.header), heads = string(S.header); end
+    if isempty(heads) && isfield(S,'colnames') && ~isempty(S.colnames), heads = string(S.colnames); end
 
-    aIdx = find(contains(lower(heads),'alpha'), 1, 'first');
-    rIdx = find(contains(lower(heads),'reflectance'), 1, 'first');
-    if isempty(rIdx) % fallback if header is short
-        rIdx = find(contains(lower(heads),'total') & contains(lower(heads),'r'), 1, 'first');
+    % 2) Se não houver cabeçalho mas houver dados, usa fallback de índices
+    if isempty(heads)
+        if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
+            error('Tabela %s veio sem dados após o run. Verifique o Derived Values apontando para esta tabela.', ttag);
+        end
+        % Fallback: 1ª coluna = alpha, 2ª = R
+        a = S.data(:,1);
+        R = S.data(:,2);
+    else
+        % 3) Detecta colunas por nome
+        hlow = lower(heads);
+        aIdx = find(contains(hlow,'alpha'), 1, 'first');
+        rIdx = find(contains(hlow,'reflectance') | contains(hlow,'total reflectance') | contains(hlow,' total r'), 1, 'first');
+
+        if isempty(aIdx) || isempty(rIdx)
+            % Se os nomes mudarem, ainda tento fallback por posição (>=2 colunas)
+            if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
+                error('Alpha/Reflectance não encontrados em %s e sem colunas suficientes para fallback.', ttag);
+            end
+            aIdx = 1; rIdx = 2;
+        end
+
+        a = S.data(:, aIdx);
+        R = S.data(:, rIdx);
     end
-    assert(~isempty(aIdx) && ~isempty(rIdx), 'Alpha/Reflectance columns not found in %s.', ttag);
 
-    a = S.data(:, aIdx);
-    R = S.data(:, rIdx);
-
+    % 4) Checagens e recorte do sweep atual
     assert(numel(a) >= Npts && numel(R) >= Npts, ...
-        'Table %s has %d rows; need >= %d.', ttag, numel(a), Npts);
-
+        'Tabela %s tem %d linhas; esperado >= %d.', ttag, numel(a), Npts);
     a = a(end-Npts+1:end);
     R = R(end-Npts+1:end);
 
-    % Convert to degrees if alpha is in radians
-    h = lower(heads(aIdx));
-    if contains(h, '(rad)') || contains(h, '[rad]')
-        a = a * 180/pi;
+    % 5) Converte rad->deg se necessário (quando temos cabeçalho)
+    if ~isempty(heads)
+        hlow = lower(heads);
+        if any(contains(hlow, '(rad)')) || any(contains(hlow, '[rad]'))
+            a = a * 180/pi;
+        end
     end
 
     alpha_deg = a;
     Rcol      = R;
 end
+
 
 function s = fmt_time_long(sec)
     if ~isfinite(sec) || sec < 0, s = '...'; return; end
