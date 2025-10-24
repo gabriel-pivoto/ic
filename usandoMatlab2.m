@@ -41,30 +41,34 @@ hau_grid_nm     = 20:10:60;           % 5
 % COARSE points = 3*3*3*2*5 = 270  -> runs = 270 * 2 (m=±1)
 
 % ---------------------- Alpha ranges/steps -------------------------
-alpha_coarse_rng = [0, 1.0, 89];  % fast
-alpha_fine_step  = 0.01;          % precise
-alpha_super_step = 0.01;
-alpha_full_step  = 0.01;
-alpha_dense_step = 0.01;
+alpha_coarse_rng = [0, 1.0, 89];  % full sweep for COARSE
+alpha_fine_step  = 0.1;           % FINE window step
+alpha_super_step = 0.01;          % SUPERFINE window step
+alpha_dense_step = 0.01;          % final/validation
+alpha_full_step  = 0.01;          % final curve
 
 % ----------------------- TOP-K strategy ---------------------------
 TOPK_COARSE = 1;   % refine around 1 seed
 TOPK_FINE   = 1;
 
 % --------------------- Refinement windows -------------------------
-% FINE
+% FINE param windows
 fine_hau_delta   = 2;    fine_hau_step   = 1;
 fine_hcey_delta  = 5;    fine_hcey_step  = 1;
 fine_Ldom_delta  = 10;   fine_Ldom_step  = 5;
 fine_Lden_delta  = 10;   fine_Lden_step  = 5;
 fine_hsi_delta   = 5;    fine_hsi_step   = 5;
 
-% SUPERFINE (exact upfront)
+% SUPERFINE param windows
 super_hau_delta  = 1;    super_hau_step  = 0.5;
 super_hcey_delta = 2;    super_hcey_step = 1;
 super_Ldom_delta = 4;    super_Ldom_step = 2;
 super_Lden_delta = 4;    super_Lden_step = 2;
 super_hsi_delta  = 2;    super_hsi_step  = 1;
+
+% ------------------ Alpha windows (centered at last peak) ----------
+FINE_ALPHA_HALFSPAN   = 5;     % ±5° (step 0.1)
+SUPER_ALPHA_HALFSPAN  = 2;     % ±2° (step 0.01)
 
 % ----------------------- Outputs / Plots ---------------------------
 SAVE_SNAPSHOT = true;
@@ -82,7 +86,7 @@ ModelUtil.showProgress(true);
 t0 = tic;                            % global clock
 runs_done_global = 0;
 is_total_exact   = false;            % start with estimate
-grand_total_target = NaN; %#ok<NASGU>  % estimated first, exact later
+grand_total_target = NaN; %#ok<NASGU>
 
 % ---- COARSE (exact) ----
 nL = numel(Ldomain_grid_nm);
@@ -154,6 +158,7 @@ for iL = 1:nL
                 for ih = 1:nH
                     setParamNm(model, PARAM_HAU, hau_grid_nm(ih));
 
+                    % Full alpha sweep (0:1:89) in COARSE
                     [a_deg, Rplus, Rminus, TM] = solveAndGetRplusRminus( ...
                         model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
                         alpha_coarse_rng(1), alpha_coarse_rng(2), alpha_coarse_rng(3), ...
@@ -232,7 +237,8 @@ stage_total_runs = fine_total_runs;
 stage_t0 = tic;
 
 for s = 1:height(seeds)
-    a0 = seeds.alpha_at_peak_deg(s); %#ok<NASGU> % not used now, full-alpha sweep
+    % Center α window at the COARSE peak of this seed
+    aCenter = seeds.alpha_at_peak_deg(s);
 
     Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
     Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
@@ -240,8 +246,9 @@ for s = 1:height(seeds)
     Dlist = max(min(ldente_grid_nm),  seeds.l_dente_nm(s) - fine_Lden_delta) : fine_Lden_step : min(max(ldente_grid_nm),  seeds.l_dente_nm(s) + fine_Lden_delta);
     Slist = max(min(hsi_grid_nm),     seeds.h_si_nm(s)    - fine_hsi_delta)  : fine_hsi_step  : min(max(hsi_grid_nm),     seeds.h_si_nm(s)    + fine_hsi_delta);
 
-    % --- FULL-ALPHA SWEEP (0:0.01:89) ---
-    aStart = 0; aStop = 89;
+    % --- α window: ±5°, step 0.1 ---
+    aStart = max(0,  aCenter - FINE_ALPHA_HALFSPAN);
+    aStop  = min(89, aCenter + FINE_ALPHA_HALFSPAN);
 
     for iL = 1:numel(Llist)
         setParamNm(model, PARAM_LDOM, Llist(iL));
@@ -323,7 +330,8 @@ stage_total_runs = super_total_runs;
 stage_t0 = tic;
 
 for s = 1:height(seedsSuper)
-    a0 = seedsSuper.alpha_at_peak_deg(s); %#ok<NASGU>
+    % Center α window at the FINE peak
+    aCenter = seedsSuper.alpha_at_peak_deg(s);
 
     Hlist = (seedsSuper.h_au_nm(s)    - super_hau_delta)  : super_hau_step  : (seedsSuper.h_au_nm(s)    + super_hau_delta);
     Glist = (seedsSuper.h_ceyig_nm(s) - super_hcey_delta) : super_hcey_step : (seedsSuper.h_ceyig_nm(s) + super_hcey_delta);
@@ -331,8 +339,9 @@ for s = 1:height(seedsSuper)
     Dlist = (seedsSuper.l_dente_nm(s) - super_Lden_delta) : super_Lden_step : (seedsSuper.l_dente_nm(s) + super_Lden_delta);
     Slist = (seedsSuper.h_si_nm(s)    - super_hsi_delta)  : super_hsi_step  : (seedsSuper.h_si_nm(s)    + super_hsi_delta);
 
-    % --- FULL-ALPHA SWEEP (0:0.01:89) ---
-    aStart = 0; aStop = 89;
+    % --- α window: ±2°, step 0.01 ---
+    aStart = max(0,  aCenter - SUPER_ALPHA_HALFSPAN);
+    aStop  = min(89, aCenter + SUPER_ALPHA_HALFSPAN);
 
     for iL = 1:numel(Llist)
         setParamNm(model, PARAM_LDOM, Llist(iL));
@@ -410,7 +419,7 @@ setParamNm(model, PARAM_HAU,  hau_best);
 
 runs_done_global = runs_done_global + 2;
 
-[~, kV]   = max(abs(TM_dense));   % removed pkV (unused)
+[~, kV]   = max(abs(TM_dense));
 alpha_best  = a_dense(kV);
 tmoke_best  = TM_dense(kV);
 
@@ -477,25 +486,6 @@ writetable(BestDense,fullfile(homeDir,'tmoke_best_5D_dense_alpha_0_89_step0p01.c
 writetable(BestFull, fullfile(homeDir,'tmoke_best_5D_full_alpha_0_89_step0p01.csv'));
 
 % ==================================================================
-%                              PLOTS
-% ==================================================================
-if MAKE_PLOTS
-    f1 = figure; scatter3(Tcoarse.L_domain_nm, Tcoarse.l_dente_nm, Tcoarse.maxAbsTMOKE, ...
-        28, Tcoarse.maxAbsTMOKE, 'filled'); grid on
-    xlabel('L_{domain} [nm]'); ylabel('l_{dente} [nm]'); zlabel('max |TMOKE|');
-    title('COARSE — Peak |TMOKE| vs (L_{domain}, l_{dente})');
-    saveas(f1, fullfile(homeDir,'tmoke_peak_by_Ldom_Lden.png'));
-
-    f2 = figure; plot(a_full, TM_full, '-', 'LineWidth', 1.1); grid on; hold on
-    plot(alpha_best, tmoke_best, 'o', 'MarkerSize', 7, 'LineWidth', 1.2);
-    xlim([0 89]); xticks(0:10:90);
-    xlabel('\alpha [deg]'); ylabel('TMOKE');
-    title(sprintf('Best 5D: L_{dom}=%d, l_{dente}=%d, h_{si}=%d, h_{ceyig}=%.2f, h_{au}=%.2f nm', ...
-        round(Ldom_best), round(Lden_best), round(hsi_best), hcey_best, hau_best));
-    saveas(f2, fullfile(homeDir,'tmoke_best_5D_full_alpha_curve.png'));
-end
-
-% ==================================================================
 %                           FINAL SUMMARY
 % ==================================================================
 elapsed_total = toc(t0);
@@ -519,7 +509,6 @@ end
 function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mPlusStr, mMinusStr, ttagPlus, ttagMinus)
     % Run α sweep for m=+1 (-> ttagPlus) and m=-1 (-> ttagMinus).
-    % Each table is CLEARED before run; columns are detected by header names.
     ensureTable(mdl, ttagPlus);
     ensureTable(mdl, ttagMinus);
 
@@ -541,7 +530,6 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     refreshDerivedValues(mdl);
     [alpha2_deg, R2] = readAlphaAndRFromNamedTable(mdl, ttagMinus, Npts);
 
-    % align
     assert(numel(alpha1_deg)==Npts && numel(alpha2_deg)==Npts, 'Unexpected α sweep length.');
     assert(max(abs(alpha1_deg - alpha2_deg)) < 1e-9, 'α grids differ between m=+1 and m=-1.');
 
@@ -550,14 +538,14 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     Rminus = R2;
 
     denom = Rplus + Rminus;
-    denom(abs(denom) < 1e-9) = 1e-9;  % safer clamp
+    denom(abs(denom) < 1e-9) = 1e-9;
     TMOKE = (Rplus - Rminus) ./ denom;
 end
 
 function setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mStr)
     ptag = getParametricTag(mdl, studyTag);
     mdl.study(studyTag).feature(ptag).set('pname', {alphaName, mName});
-    mdl.study(studyTag).feature(ptag).set('punit', {'deg','1'}); % enforce units
+    mdl.study(studyTag).feature(ptag).set('punit', {'deg','1'});
     alist = sprintf('range(%.12g[deg], %.12g[deg], %.12g[deg])', aStartDeg, aStepDeg, aStopDeg);
     mdl.study(studyTag).feature(ptag).set('plistarr', {alist, mStr});
 end
@@ -586,7 +574,7 @@ end
 
 function ensureTable(mdl, ttag)
     try
-        mdl.result().table(ttag); % exists
+        mdl.result().table(ttag);
     catch
         try mdl.result().table().create(ttag, 'Table'); catch, end
     end
@@ -597,7 +585,6 @@ function clearTable(mdl, ttag)
 end
 
 function redirectAllNumericalsToTable(mdl, ttag)
-    % Route ALL numerical results to a specific table
     try
         ntags = cell(mdl.result().numerical().tags());
         for k = 1:numel(ntags)
@@ -608,62 +595,44 @@ function redirectAllNumericalsToTable(mdl, ttag)
 end
 
 function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
-    % Lê as últimas Npts linhas da tabela 'ttag'.
-    % Tenta detectar colunas por cabeçalho; se não houver, usa fallback (1=alpha, 2=R).
-
     S = mphtable(mdl, ttag);
 
-    % 1) Heads robustos (várias chaves possíveis em versões diferentes)
     heads = [];
     if isfield(S,'colhead') && ~isempty(S.colhead), heads = string(S.colhead); end
     if isempty(heads) && isfield(S,'head') && ~isempty(S.head), heads = string(S.head); end
     if isempty(heads) && isfield(S,'header') && ~isempty(S.header), heads = string(S.header); end
     if isempty(heads) && isfield(S,'colnames') && ~isempty(S.colnames), heads = string(S.colnames); end
 
-    % 2) Se não houver cabeçalho mas houver dados, usa fallback de índices
     if isempty(heads)
         if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
-            error('Tabela %s veio sem dados após o run. Verifique o Derived Values apontando para esta tabela.', ttag);
+            error('Table %s empty after run. Check Derived Values.', ttag);
         end
-        % Fallback: 1ª coluna = alpha, 2ª = R
-        a = S.data(:,1);
-        R = S.data(:,2);
+        a = S.data(:,1); R = S.data(:,2);
     else
-        % 3) Detecta colunas por nome
         hlow = lower(heads);
         aIdx = find(contains(hlow,'alpha'), 1, 'first');
         rIdx = find(contains(hlow,'reflectance') | contains(hlow,'total reflectance') | contains(hlow,' total r'), 1, 'first');
-
         if isempty(aIdx) || isempty(rIdx)
-            % Se os nomes mudarem, ainda tento fallback por posição (>=2 colunas)
             if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
-                error('Alpha/Reflectance não encontrados em %s e sem colunas suficientes para fallback.', ttag);
+                error('Alpha/Reflectance not found in %s and not enough columns.', ttag);
             end
             aIdx = 1; rIdx = 2;
         end
-
-        a = S.data(:, aIdx);
-        R = S.data(:, rIdx);
+        a = S.data(:, aIdx); R = S.data(:, rIdx);
     end
 
-    % 4) Checagens e recorte do sweep atual
     assert(numel(a) >= Npts && numel(R) >= Npts, ...
-        'Tabela %s tem %d linhas; esperado >= %d.', ttag, numel(a), Npts);
+        'Table %s has %d rows; expected >= %d.', ttag, numel(a), Npts);
     a = a(end-Npts+1:end);
     R = R(end-Npts+1:end);
 
-    % 5) Converte rad->deg se necessário (quando temos cabeçalho)
     if ~isempty(heads)
         hlow = lower(heads);
-        if any(contains(hlow, '(rad)')) || any(contains(hlow, '[rad]'))
-            a = a * 180/pi;
-        end
+        if any(contains(hlow, '(rad)')) || any(contains(hlow, '[rad]')), a = a * 180/pi; end
     end
 
-    alpha_deg = a;
-    Rcol      = R;
+    alpha_deg = a; Rcol = R;
 end
-
 
 function s = fmt_time_long(sec)
     if ~isfinite(sec) || sec < 0, s = '...'; return; end
@@ -752,7 +721,6 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, alpha_deg, TMOKE_vec,
         set(hRm, 'XData', nan, 'YData', nan);
     end
 
-    % Title includes stage + parameters (loop order preserved)
     title(ax, sprintf('%s | L_{dom}=%g nm | l_{dente}=%g nm | h_{si}=%g nm | h_{ceyig}=%.3f nm | h_{au}=%.3f nm | |TM|_{peak}=%.5f @ %.3f°', ...
         stage, Ldom, Lden, hsi, hcey, hau, abs(tmoke_peak), alpha_peak));
 
