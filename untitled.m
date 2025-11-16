@@ -12,7 +12,8 @@
 % =====================================================================
 
 clear; clc; close all; format long; tic
-import com.comsol.model.*; import com.comsol.model.util.*
+import com.comsol.model.*; 
+import com.comsol.model.util.*
 
 % --------------------------- Paths/Project -------------------------
 homeDir  = 'C:\Users\gabri\Documents\projetoIC';   % << adjust if needed
@@ -28,12 +29,13 @@ CKPT_EVERY_POINTS = 10;   % save every 10 param points (not "runs")
 points_since_ckpt = 0;
 
 % Try resume
-RESUME = false; CKPT = struct; RESUME_STAGE = '';
+RESUME = false; CKPT = struct; RESUME_STAGE = "";
 if isfile(CKPT_FILE)
     try
         S = load(CKPT_FILE,'CKPT');
         CKPT = S.CKPT;
-        RESUME = true; RESUME_STAGE = string(CKPT.stage);
+        RESUME = true; 
+        RESUME_STAGE = string(CKPT.stage);
         fprintf('>>> RESUME detected | stage=%s | done_points=%d | runs_done_global=%d\n', ...
             RESUME_STAGE, CKPT.done_points, CKPT.runs_done_global);
     catch
@@ -169,14 +171,20 @@ fprintf('  TOTAL  (estimate): %d runs\n\n', grand_total_target);
 % ==================================================================
 %                              COARSE
 % ==================================================================
-Tcoarse = []; seeds = [];
+Tcoarse = []; 
+seeds   = [];
+
 skip_COARSE = RESUME && any(strcmp(RESUME_STAGE, ["FINE","SUPER","VALID","FULL"]));
 if skip_COARSE
     % Restore from checkpoint and bypass COARSE loops entirely
     if isfield(CKPT.payload,'Tcoarse'), Tcoarse = CKPT.payload.Tcoarse; end
     if isfield(CKPT.payload,'seeds'),   seeds   = CKPT.payload.seeds;   end
+
+    nSeeds = 0;
+    if istable(seeds), nSeeds = height(seeds); end
+
     fprintf('SKIP COARSE -> restored Tcoarse (rows=%d), seeds (rows=%d)\n', ...
-        size(Tcoarse,1), height(seeds));
+        size(Tcoarse,1), nSeeds);
 else
     fprintf('STAGE COARSE — EXACT: %d runs\n', coarse_total_runs);
     stage_runs_start = runs_done_global;
@@ -246,8 +254,6 @@ else
                         % -------- checkpoint throttle --------
                         points_since_ckpt = points_since_ckpt + 1;
                         payload = struct('Rows',Rows);
-                        Tcoarse_tmp = [];
-                        if exist('Tcoarse','var'), Tcoarse_tmp = Tcoarse; end
                         points_since_ckpt = maybe_checkpoint( ...
                             'COARSE', CKPT_EVERY_POINTS, CKPT_FILE, PROGRESS_XLSX, ...
                             runs_done_global, points_since_ckpt, coarse_point_idx, payload, ...
@@ -274,9 +280,13 @@ end
 % ==================================================================
 %                        FINE PLANNING (EXACT NOW)
 % ==================================================================
-% If resuming from FINE/SUPER/VALID/FULL, ensure seeds exist
-if isempty(seeds) && RESUME && any(strcmp(RESUME_STAGE, ["FINE","SUPER","VALID","FULL"]))
-    if isfield(CKPT.payload,'seeds'), seeds = CKPT.payload.seeds; else, error('Missing seeds in checkpoint.'); end
+% If resuming exactly at FINE, ensure seeds exist
+if isempty(seeds) && RESUME && RESUME_STAGE=="FINE"
+    if isfield(CKPT.payload,'seeds')
+        seeds = CKPT.payload.seeds;
+    else
+        error('Checkpoint at FINE stage has no "seeds" field. Delete it and rerun COARSE.');
+    end
 end
 
 % Compute exact FINE grid (around seeds)
@@ -304,7 +314,9 @@ end
 % ==================================================================
 %                                 FINE
 % ==================================================================
-Tfine = []; seedsSuper = [];
+Tfine = []; 
+seedsSuper = [];
+
 if RESUME && any(strcmp(RESUME_STAGE, ["SUPER","VALID","FULL"]))
     % Bypass FINE loops; restore products of FINE
     if isfield(CKPT.payload,'Tfine'),      Tfine = CKPT.payload.Tfine; end
@@ -318,10 +330,11 @@ else
     stage_t0 = tic;
 
     fine_point_idx = 0;
-    if RESUME && RESUME_STAGE=="FINE"
+    if RESUME && RESUME_STAGE=="FINE" && CKPT.done_points > 0
         runs_done_global = CKPT.runs_done_global;
         fine_point_idx   = CKPT.done_points;
         if isfield(CKPT.payload,'FinePeaks'), FinePeaks = CKPT.payload.FinePeaks; end
+        if isfield(CKPT.payload,'seeds'),     seeds     = CKPT.payload.seeds;     end
         fprintf('>>> FINE resume: skipping %d points already computed.\n', fine_point_idx);
     end
 
@@ -416,9 +429,13 @@ end
 % ==================================================================
 %                     SUPERFINE PLANNING (EXACT)
 % ==================================================================
-% If resuming from SUPER/VALID/FULL, ensure seedsSuper exist
-if isempty(seedsSuper) && RESUME && any(strcmp(RESUME_STAGE, ["SUPER","VALID","FULL"]))
-    if isfield(CKPT.payload,'seedsSuper'), seedsSuper = CKPT.payload.seedsSuper; else, error('Missing seedsSuper in checkpoint.'); end
+% If resuming exactly at SUPER, ensure seedsSuper exist
+if isempty(seedsSuper) && RESUME && RESUME_STAGE=="SUPER"
+    if isfield(CKPT.payload,'seedsSuper')
+        seedsSuper = CKPT.payload.seedsSuper;
+    else
+        error('Checkpoint at SUPER stage has no "seedsSuper" field. Delete it and rerun FINE.');
+    end
 end
 
 super_total_pts = 0;
@@ -438,8 +455,10 @@ fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', grand_total_target);
 % ==================================================================
 %                             SUPERFINE
 % ==================================================================
-Tsuper = []; Ldom_best=[]; Lden_best=[]; hsi_best=[]; hcey_best=[]; hau_best=[];
+Tsuper = []; 
+Ldom_best=[]; Lden_best=[]; hsi_best=[]; hcey_best=[]; hau_best=[];
 alpha_best=[]; tmoke_best=[];
+
 if RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
     % Bypass SUPER loops; restore Tsuper and best 5D
     if isfield(CKPT.payload,'Tsuper'),     Tsuper = CKPT.payload.Tsuper; end
@@ -456,7 +475,7 @@ else
     stage_t0 = tic;
 
     super_point_idx = 0;
-    if RESUME && RESUME_STAGE=="SUPER"
+    if RESUME && RESUME_STAGE=="SUPER" && CKPT.done_points > 0
         runs_done_global = CKPT.runs_done_global;
         super_point_idx  = CKPT.done_points;
         if isfield(CKPT.payload,'SuperPeaks'), SuperPeaks = CKPT.payload.SuperPeaks; end
@@ -567,8 +586,10 @@ end
 % ==================================================================
 % Restore best 5D when resuming at VALID/FULL
 if isempty(Ldom_best) && RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
-    Ldom_best = CKPT.payload.Ldom_best; Lden_best = CKPT.payload.Lden_best;
-    hsi_best  = CKPT.payload.hsi_best;  hcey_best = CKPT.payload.hcey_best;
+    Ldom_best = CKPT.payload.Ldom_best; 
+    Lden_best = CKPT.payload.Lden_best;
+    hsi_best  = CKPT.payload.hsi_best;  
+    hcey_best = CKPT.payload.hcey_best;
     hau_best  = CKPT.payload.hau_best;
 end
 
@@ -805,7 +826,8 @@ function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
         if any(contains(hlow, '(rad)')) || any(contains(hlow, '[rad]')), a = a * 180/pi; end
     end
 
-    alpha_deg = a; Rcol = R;
+    alpha_deg = a; 
+    Rcol      = R;
 end
 
 function s = fmt_time_long(sec)
@@ -816,8 +838,10 @@ function s = fmt_time_long(sec)
     rem  = rem - 3600*hrs;
     mins = floor(rem/60);
     secs = floor(rem - 60*mins);
-    if days > 0, s = sprintf('%dd %02d:%02d:%02d', days, hrs, mins, secs);
-    else,        s = sprintf('%02d:%02d:%02d', hrs, mins, secs);
+    if days > 0
+        s = sprintf('%dd %02d:%02d:%02d', days, hrs, mins, secs);
+    else
+        s = sprintf('%02d:%02d:%02d', hrs, mins, secs);
     end
 end
 
@@ -901,6 +925,7 @@ function points_since_ckpt_new = maybe_checkpoint( ...
         points_since_ckpt_new = 0; % reset
     end
 end
+
 function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
                         alpha_deg, TMOKE_vec, alpha_peak, tmoke_peak, ...
                         Rplus, Rminus)
@@ -914,13 +939,17 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
 
         fig = figure('Name','TMOKE vs \alpha (live)', ...
                      'NumberTitle','off','Tag','TMOKE_LIVE_FIG');
-        ax  = axes('Parent',fig,'Tag','TMOKE_LIVE_AX'); grid(ax,'on'); hold(ax,'on');
+        ax  = axes('Parent',fig,'Tag','TMOKE_LIVE_AX'); 
+        grid(ax,'on'); 
+        hold(ax,'on');
 
         % Left axis: TMOKE curve + peak marker
         yyaxis(ax,'left');
         hTM   = plot(ax, nan, nan, '-', 'LineWidth', 1.2, 'DisplayName','TMOKE(\alpha)');
         hPeak = plot(ax, nan, nan, 'o', 'MarkerSize', 6, 'DisplayName','peak TMOKE');
-        ylabel(ax,'TMOKE'); xlim(ax,[0 89]); xlabel(ax,'\alpha [deg]');
+        ylabel(ax,'TMOKE'); 
+        xlim(ax,[0 89]); 
+        xlabel(ax,'\alpha [deg]');
 
         % Right axis: R+ and R-
         yyaxis(ax,'right');
@@ -956,4 +985,3 @@ end
 function tf = isvalidHandle(h)
     tf = ~isempty(h) && isvalid(h);
 end
-
