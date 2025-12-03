@@ -1,22 +1,22 @@
 % =====================================================================
 % TMOKE 5D — Otimização de Sensibilidade vs n (deg/RIU)
 %
-% - Varre as 5 camadas: (h_au, h_ceyig, L_domain, l_dente, h_si)
-% - Para cada combinação:
-%       * para n em [1.33 1.36 1.39]:
-%             - seta n no modelo
-%             - roda solveAndGetRplusRminus(alpha sweep)
-%             - acha alpha_peak(n) onde |TMOKE| é máximo
-%       * faz regressão linear alpha_peak(n) => S = d(alpha)/dn [deg/RIU]
-% - Objetivo: maximizar |S|
+% - Mesma ideia do mini-script de sensibilidade:
+%     * n = [1.33 1.36 1.39]
+%     * para cada n: varre alpha, acha alpha_peak(n) (max |TMOKE|)
+%     * faz polyfit(alpha_peak vs n) -> S = d(alpha_peak)/dn [deg/RIU]
+% - Mas agora:
+%     * varre as camadas (h_au, h_ceyig, L_domain, l_dente, h_si)
+%     * calcula S para cada geometria
+%     * busca a geometria com maior |S|
 %
-% Estágios:
-%   1) COARSE: grade grossa 5D
-%   2) FINE: janela em torno do melhor ponto (ou TOP-K)
+% Extra:
+%   - Estima número de iterações (pontos de geometria) COARSE + FINE (estimado)
+%   - Plota S em tempo real (cada vez que um novo S é calculado)
+%   - Log detalhado no terminal com contagem global de iterações
 %
 % Checkpoint:
 %   - Arquivo: /checkpoints/tmoke_sens_5d_checkpoint.mat
-%   - Campos: stage, done_points, runs_done_global, Tcoarse, Tfine, best
 % =====================================================================
 
 clear; clc; close all; format long;
@@ -49,11 +49,12 @@ RPLUS_TABLE_TAG  = 'tblRplus';
 RMINUS_TABLE_TAG = 'tblRminus';
 
 % ------------------------ Sensibilidade vs n --------------------------
-na = [1.33 1.36 1.39];         % índices para sensibilidade
-alpha_start = 0;               % varredura em alpha (COARSE/FINE)
-alpha_step_coarse = 1.0;
-alpha_step_fine   = 0.1;
-alpha_stop  = 89;
+na = [1.33 1.36 1.39];         % índices para sensibilidade (3 n)
+alpha_start        = 0;        % início do sweep em alpha
+alpha_step_coarse  = 1.0;      % passo em alpha no COARSE
+alpha_step_fine    = 0.1;      % passo em alpha no FINE
+alpha_step_dense   = 0.01;     % passo em alpha na validação final
+alpha_stop         = 89;       % fim do sweep em alpha
 
 % ------------------------ Grade COARSE das camadas -------------------
 % Loop order: L_domain -> l_dente -> h_si -> h_ceyig -> h_au
@@ -100,7 +101,7 @@ end
 
 runs_done_global   = 0;
 done_points_global = 0;
-CKPT_EVERY_POINTS  = 10;  % salva a cada 10 pontos de grade
+CKPT_EVERY_POINTS  = 10;  % salva a cada 10 pontos de geometria (COARSE+FINE)
 
 % --------------------------- Carrega modelo --------------------------
 ModelUtil.clear;
@@ -110,6 +111,42 @@ ModelUtil.showProgress(true);
 t0 = tic;
 
 % =====================================================================
+%                 ESTIMATIVA DE NÚMERO DE ITERAÇÕES
+% =====================================================================
+nL = numel(Ldomain_grid_nm);
+nD = numel(ldente_grid_nm);
+nS = numel(hsi_grid_nm);
+nG = numel(hcey_grid_nm);
+nH = numel(hau_grid_nm);
+
+coarse_total_pts  = nL*nD*nS*nG*nH;      % pontos de geometria
+coarse_total_runs = coarse_total_pts * numel(na) * 2;  % n * m(+/-)
+
+% Estimativa "pior caso" de FINE ao redor de cada seed (sem clamp)
+fine_H = 1 + floor(2*fine_hau_delta   / fine_hau_step);
+fine_G = 1 + floor(2*fine_hcey_delta  / fine_hcey_step);
+fine_L = 1 + floor(2*fine_Ldom_delta  / fine_Ldom_step);
+fine_D = 1 + floor(2*fine_Lden_delta  / fine_Lden_step);
+fine_S = 1 + floor(2*fine_hsi_delta   / fine_hsi_step);
+fine_pts_per_seed_est = fine_L*fine_D*fine_S*fine_G*fine_H;
+fine_total_pts_est    = TOPK_COARSE * fine_pts_per_seed_est;
+fine_total_runs_est   = fine_total_pts_est * numel(na) * 2;
+
+total_pts_est_global  = coarse_total_pts + fine_total_pts_est;
+total_runs_est_global = coarse_total_runs + fine_total_runs_est;
+
+fprintf('\n===== ESTIMATIVA DE REPETIÇÕES =====\n');
+fprintf('COARSE: %d pontos de geometria (~%d runs COMSOL)\n', ...
+    coarse_total_pts, coarse_total_runs);
+fprintf('FINE (estimado): ~%d pontos de geometria (~%d runs COMSOL)\n', ...
+    fine_total_pts_est, fine_total_runs_est);
+fprintf('TOTAL (estimado): ~%d pontos de geometria (~%d runs COMSOL)\n\n', ...
+    total_pts_est_global, total_runs_est_global);
+
+% contador global de iterações de geometria (para o plot live)
+iter_global = 0;
+
+% =====================================================================
 %                             COARSE
 % =====================================================================
 coarse_done_points = 0;
@@ -117,20 +154,15 @@ if RESUME && any(RES_STAGE == ["FINE","VALID"])
     fprintf('Pulando COARSE (já feito).\n');
 else
     fprintf('\n===== STAGE COARSE =====\n');
-    Rows = [];   % Ldom, Lden, hsi, hcey, hau, S, S_sign
+    Rows = [];   % Ldom, Lden, h_si, h_cey, h_au, S, S_sign
 
     if RESUME && RES_STAGE == "COARSE"
         runs_done_global   = CKPT.runs_done_global;
         coarse_done_points = CKPT.done_points;
         if isfield(CKPT,'Rows'), Rows = CKPT.Rows; end
+        if isfield(CKPT,'iter_global'), iter_global = CKPT.iter_global; end
         fprintf('>>> RESUME COARSE: já tinha %d pontos.\n', coarse_done_points);
     end
-
-    nL = numel(Ldomain_grid_nm);
-    nD = numel(ldente_grid_nm);
-    nS = numel(hsi_grid_nm);
-    nG = numel(hcey_grid_nm);
-    nH = numel(hau_grid_nm);
 
     flat_idx = 0;
 
@@ -165,10 +197,19 @@ else
                         coarse_done_points = coarse_done_points + 1;
                         done_points_global = done_points_global + 1;
 
-                        fprintf(['COARSE | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
-                                 ' | S=%.6f deg/RIU (sign=%+d) | ponto=%d\n'], ...
+                        % --- contador global e fração estimada ---
+                        iter_global = iter_global + 1;
+                        frac_global = iter_global / max(1,total_pts_est_global);
+
+                        % --------- log no terminal ---------------
+                        fprintf(['COARSE | it=%4d/%4d (%.1f%%%%) | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
+                                 ' | S=%.6f deg/RIU (sign=%+d)\n'], ...
+                            iter_global, total_pts_est_global, 100*frac_global, ...
                             Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
-                            hcey_grid_nm(ig), hau_grid_nm(ih), Sval, sign(Sval), coarse_done_points);
+                            hcey_grid_nm(ig), hau_grid_nm(ih), Sval, sign(Sval));
+
+                        % ---- atualiza plot de sensibilidade -----
+                        updateSensitivityPlot(iter_global, Sval, 'COARSE');
 
                         % ---- checkpoint simples ----
                         if mod(coarse_done_points, CKPT_EVERY_POINTS) == 0
@@ -179,6 +220,7 @@ else
                             CKPT.Tcoarse          = [];
                             CKPT.Tfine            = Tfine;
                             CKPT.bestStruct       = bestStruct;
+                            CKPT.iter_global      = iter_global;
                             save(CKPT_FILE,'CKPT','-v7.3');
                             fprintf('Checkpoint COARSE salvo (%d pontos).\n', coarse_done_points);
                         end
@@ -198,6 +240,7 @@ else
     CKPT.Tcoarse          = Tcoarse;
     CKPT.Tfine            = Tfine;
     CKPT.bestStruct       = bestStruct;
+    CKPT.iter_global      = iter_global;
     save(CKPT_FILE,'CKPT','-v7.3');
     fprintf('COARSE finalizado: %d pontos.\n', coarse_done_points);
 end
@@ -231,6 +274,7 @@ else
         fine_done_points   = CKPT.done_points;
         if isfield(CKPT,'FineRows'), FineRows = CKPT.FineRows; end
         if isfield(CKPT,'seeds'),    seeds    = CKPT.seeds;    end
+        if isfield(CKPT,'iter_global'), iter_global = CKPT.iter_global; end
         fprintf('>>> RESUME FINE: já tinha %d pontos.\n', fine_done_points);
     end
 
@@ -274,9 +318,18 @@ else
                             fine_done_points = fine_done_points + 1;
                             done_points_global = done_points_global + 1;
 
-                            fprintf(['FINE   | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
-                                     ' | S=%.6f deg/RIU (sign=%+d) | ponto=%d\n'], ...
-                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), Sval, sign(Sval), fine_done_points);
+                            % --- contador global e fração estimada ---
+                            iter_global = iter_global + 1;
+                            frac_global = iter_global / max(1,total_pts_est_global);
+
+                            % --------- log no terminal ---------------
+                            fprintf(['FINE   | it=%4d/%4d (%.1f%%%%) | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
+                                     ' | S=%.6f deg/RIU (sign=%+d)\n'], ...
+                                iter_global, total_pts_est_global, 100*frac_global, ...
+                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), Sval, sign(Sval));
+
+                            % ---- atualiza plot de sensibilidade -----
+                            updateSensitivityPlot(iter_global, Sval, 'FINE');
 
                             % checkpoint
                             if mod(fine_done_points, CKPT_EVERY_POINTS) == 0
@@ -288,6 +341,7 @@ else
                                 CKPT.Tcoarse          = Tcoarse;
                                 CKPT.Tfine            = [];
                                 CKPT.bestStruct       = bestStruct;
+                                CKPT.iter_global      = iter_global;
                                 save(CKPT_FILE,'CKPT','-v7.3');
                                 fprintf('Checkpoint FINE salvo (%d pontos).\n', fine_done_points);
                             end
@@ -307,6 +361,7 @@ else
     CKPT.Tcoarse          = Tcoarse;
     CKPT.Tfine            = Tfine;
     CKPT.bestStruct       = bestStruct;
+    CKPT.iter_global      = iter_global;
     save(CKPT_FILE,'CKPT','-v7.3');
     fprintf('FINE finalizado: %d pontos.\n', fine_done_points);
 end
@@ -329,7 +384,7 @@ bestStruct.hcey_best  = bestRow.h_ceyig_nm;
 bestStruct.hau_best   = bestRow.h_au_nm;
 bestStruct.S_best     = bestRow.S_deg_per_RIU;
 
-fprintf('\n===== MELHOR CONFIGURAÇÃO POR |S| =====\n');
+fprintf('\n===== MELHOR CONFIGURAÇÃO POR |S| (COARSE+FINE) =====\n');
 disp(bestRow);
 
 CKPT.stage            = 'VALID';
@@ -338,6 +393,7 @@ CKPT.runs_done_global = runs_done_global;
 CKPT.Tcoarse          = Tcoarse;
 CKPT.Tfine            = Tfine;
 CKPT.bestStruct       = bestStruct;
+CKPT.iter_global      = iter_global;
 save(CKPT_FILE,'CKPT','-v7.3');
 
 % =====================================================================
@@ -350,8 +406,6 @@ setParamNm(model, PARAM_LDEN, bestStruct.Lden_best);
 setParamNm(model, PARAM_HSI,  bestStruct.hsi_best);
 setParamNm(model, PARAM_HCEY, bestStruct.hcey_best);
 setParamNm(model, PARAM_HAU,  bestStruct.hau_best);
-
-alpha_step_dense = 0.01;
 
 S_dense      = 0;
 alpha_peaks  = zeros(size(na));
@@ -384,7 +438,7 @@ fprintf(' ]\n');
 fprintf('Sensibilidade (VALID) S ≈ %.6f deg/RIU\n', S_dense);
 
 % ------------------------- Plots finais ------------------------------
-figure('Name','Sensibilidade TMOKE vs n','NumberTitle','off');
+figure('Name','Sensibilidade TMOKE vs n (melhor 5D)','NumberTitle','off');
 hold on; grid on;
 plot(na, alpha_peaks, 'o','LineWidth',1.5,'DisplayName','dados (\alpha_{peak})');
 na_fit    = linspace(min(na), max(na), 100);
@@ -396,7 +450,7 @@ ylabel('\alpha_{peak} [deg]');
 title('Sensibilidade de \alpha_{peak} em função de n (melhor 5D)');
 legend('Location','best');
 
-figure('Name','TMOKE vs \alpha para diferentes n (best 5D)','NumberTitle','off');
+figure('Name','TMOKE vs \alpha para diferentes n (melhor 5D)','NumberTitle','off');
 hold on; grid on;
 for i = 1:numel(na)
     plot(alpha_all{i}, TM_all{i}, 'LineWidth',1.2, ...
@@ -414,8 +468,8 @@ if ~isempty(Tfine)
 end
 
 BestSensRow = bestRow;
-BestSensRow.alpha_peaks_deg = {alpha_peaks};
-BestSensRow.S_dense_deg_per_RIU = S_dense;
+BestSensRow.alpha_peaks_deg         = {alpha_peaks};
+BestSensRow.S_dense_deg_per_RIU     = S_dense;
 writetable(BestSensRow, fullfile(homeDir,'tmoke_sens_5D_best.csv'));
 
 % -------------------------- Summary ----------------------------------
@@ -427,9 +481,9 @@ fprintf('  l_dente  = %4.0f nm\n', bestStruct.Lden_best);
 fprintf('  h_si     = %3.0f nm\n', bestStruct.hsi_best);
 fprintf('  h_ceyig  = %.3f nm\n', bestStruct.hcey_best);
 fprintf('  h_au     = %.3f nm\n', bestStruct.hau_best);
-fprintf('  S (FINE) ≈ %.6f deg/RIU\n', bestStruct.S_best);
-fprintf('  S (VALID)≈ %.6f deg/RIU\n', S_dense);
-fprintf('Runs totais ≈ %d\n', runs_done_global);
+fprintf('  S (FINE)  ≈ %.6f deg/RIU\n', bestStruct.S_best);
+fprintf('  S (VALID) ≈ %.6f deg/RIU\n', S_dense);
+fprintf('Runs totais (aprox) ≈ %d\n', runs_done_global);
 fprintf('Tempo total: %.1f s\n', elapsed_total);
 
 % =====================================================================
@@ -444,6 +498,7 @@ function [Sval, alpha_peaks] = evaluate_sensitivity( ...
         alphaName, mName, aStartDeg, aStepDeg, aStopDeg, ...
         mPlusStr, mMinusStr, ttagPlus, ttagMinus)
 % Calcula S = d(alpha_peak)/dn (deg/RIU) para uma geometria fixa.
+% Faz o sweep em n (3 valores), e para cada n varre alpha.
     alpha_peaks = zeros(size(na));
     for i = 1:numel(na)
         n_val = na(i);
@@ -607,4 +662,36 @@ function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
 
     alpha_deg = a;
     Rcol      = R;
+end
+
+function updateSensitivityPlot(iter_idx, Sval, stage)
+% Plot online: S vs iteração global, separando COARSE/FINE
+    persistent fig ax hCoarse hFine inited
+
+    if isempty(inited) || ~isgraphics(fig)
+        fig = figure('Name','Sensibilidade vs Iteração','NumberTitle','off');
+        ax  = axes('Parent',fig); hold(ax,'on'); grid(ax,'on');
+        xlabel(ax,'Iteração global (ponto de geometria)');
+        ylabel(ax,'S [deg/RIU]');
+        title(ax,'Evolução da sensibilidade ao longo da busca');
+        hCoarse = plot(ax, nan, nan, 'o-','DisplayName','COARSE');
+        hFine   = plot(ax, nan, nan, 'x-','DisplayName','FINE');
+        legend(ax,'Location','best');
+        inited = true;
+    end
+
+    switch upper(stage)
+        case 'COARSE'
+            x = get(hCoarse,'XData'); y = get(hCoarse,'YData');
+            x = [x, iter_idx];        y = [y, Sval];
+            set(hCoarse,'XData',x,'YData',y);
+        case 'FINE'
+            x = get(hFine,'XData'); y = get(hFine,'YData');
+            x = [x, iter_idx];      y = [y, Sval];
+            set(hFine,'XData',x,'YData',y);
+        otherwise
+            % ignora outros estágios
+    end
+
+    drawnow limitrate;
 end
