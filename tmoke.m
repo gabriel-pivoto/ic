@@ -1,40 +1,117 @@
-% =====================================================================
-% MATLAB + COMSOL — 5D Hierarchical Search with strict < 20k runs
-% Checkpoint & Resume enabled (every N points) + XLSX progress snapshots
+%% =====================================================================
+% MATLAB + COMSOL — 5D Hierarchical Search (STRICT < 20k runs)
 %
-% Params: (h_au, h_ceyig, L_domain, l_dente, h_si)
-% Stages: COARSE -> FINE -> SUPERFINE -> dense validation -> final curve
-% - Live plot every iteration: TMOKE (left) + R+ / R- (right)
-% - Global ETA always visible: starts EST., becomes EXACT after seed clamp
-% - Writes R+ in 'tblRplus' and R- in 'tblRminus' (cleared each run)
-% - Checkpoint file: /checkpoints/tmoke_5d_checkpoint.mat
-% - Progress XLSX:   /checkpoints/tmoke_progress.xlsx (sheets per stage)
+% O QUE ESTE CÓDIGO FAZ (resumo objetivo)
+% ---------------------------------------------------------------------
+% Este script executa uma busca hierárquica em 5 parâmetros geométricos:
+%   (h_au, h_ceyig, L_domain, l_dente, h_si)
+% para encontrar a configuração que maximiza |TMOKE| (pico) e valida
+% a curva final (TMOKE e R+/R-) em alpha denso.
+%
+% Estratégia (por estágios):
+%   1) COARSE: varre uma grade maior com sweep completo de alpha (0:1:89)
+%      e guarda o pico |TMOKE| e o alpha do pico para cada geometria.
+%
+%   2) FINE: pega TOP-K seeds do COARSE e refina em torno delas com:
+%      - varredura local dos parâmetros (janelas pequenas)
+%      - varredura local de alpha centrada no alpha_peak do seed (±5°, step 0.1)
+%
+%   3) SUPERFINE: refina novamente TOP-K seeds do FINE com:
+%      - janelas ainda menores de parâmetros
+%      - alpha window mais estreita (±2°, step 0.01)
+%
+%   4) VALID (denso): re-roda o melhor ponto encontrado em alpha denso (0:0.01:89)
+%      para consolidar alpha_peak e |TMOKE|peak.
+%
+%   5) FULL: gera curva “bonita” final (0:0.01:89) no melhor ponto (mesma coisa
+%      do denso, mas guardada como produto final).
+%
+% Robustez / produtividade:
+%   - Mantém checkpoint e resume por estágio (salva a cada N "pontos" de geometria)
+%   - Escreve snapshots de progresso em XLSX (uma aba por estágio)
+%   - Mantém um runlog (diary) no disco
+%   - Plota ao vivo a cada iteração: TMOKE (esquerda) e R+/R- (direita)
+%   - Mostra ETA de estágio e ETA global:
+%       * começa estimado (antes de clamp exato das seeds do FINE)
+%       * vira EXATO quando o total global é recalculado com grid do FINE exato
+%
+% Salvar gráficos:
+%   - No final do script, salva todas as figuras abertas (inclui live plot)
+%     em PNG e PDF (vetorial) em uma pasta com timestamp.
+%
+%
+% FLUXOGRAMA (alto nível)
+% ---------------------------------------------------------------------
+% [Start]
+%   |
+%   v
+% (Load model .mph) + (Load checkpoint? resume stage?)
+%   |
+%   v
+% [COARSE] -- full alpha sweep --> compute peak(|TMOKE|) and alpha_peak
+%   |         (checkpoint + xlsx snapshots)
+%   v
+% Select TOP-K seeds
+%   |
+%   v
+% [FINE] -- local param windows + local alpha window (±5°, 0.1°)
+%   |       (checkpoint + xlsx snapshots)
+%   v
+% Select TOP-K seeds for SUPERFINE
+%   |
+%   v
+% [SUPERFINE] -- tighter windows + alpha window (±2°, 0.01°)
+%   |           (checkpoint + xlsx snapshots)
+%   v
+% Pick best geometry
+%   |
+%   v
+% [VALID] alpha dense (0:0.01:89) -> consolidate alpha_peak, |TMOKE|peak
+%   |
+%   v
+% [FULL] final dense curves (0:0.01:89) saved to CSV/XLSX
+%   |
+%   v
+% [SAVE FIGURES] -> export all open figures (PNG/PDF)
+%   |
+%   v
+% [End]
 % =====================================================================
 
 clear; clc; close all; format long; tic
-import com.comsol.model.*; 
-import com.comsol.model.util.*
+import com.comsol.model.*;
+import com.comsol.model.util.*;
 
-% --------------------------- Paths/Project -------------------------
-homeDir  = 'C:\Users\gabri\Documents\projetoIC';   % << adjust if needed
+%% --------------------------- Paths/Project -------------------------
+% Pasta base do projeto (ajuste se necessário)
+homeDir  = 'C:\Users\gabri\Documents\projetoIC';
 mph_file = fullfile(homeDir,'usandoMatlab.mph');
 addpath(genpath(homeDir));
 
-% ------------------------ Checkpoint config ------------------------
+%% ------------------------ Checkpoint config ------------------------
+% Checkpoint:
+% - Salva estado do estágio e payload suficiente para retomar com exatidão
+% - Salva a cada "pontos" de geometria (não a cada run do COMSOL)
 CKPT_DIR          = fullfile(homeDir,'checkpoints');
 if ~exist(CKPT_DIR,'dir'), mkdir(CKPT_DIR); end
 CKPT_FILE         = fullfile(CKPT_DIR,'tmoke_5d_checkpoint.mat');
+
+% XLSX de progresso:
+% - Human-readable snapshot do andamento (aba por estágio)
 PROGRESS_XLSX     = fullfile(CKPT_DIR,'tmoke_progress.xlsx');
-CKPT_EVERY_POINTS = 10;   % save every 10 param points (not "runs")
+
+CKPT_EVERY_POINTS = 10;   % salva checkpoint a cada 10 pontos de geometria
 points_since_ckpt = 0;
 
-% Try resume
+%% ------------------------ Resume / Runlog ---------------------------
+% Resume:
+% - Se existir checkpoint válido, retoma do estágio salvo
 RESUME = false; CKPT = struct; RESUME_STAGE = "";
 if isfile(CKPT_FILE)
     try
         S = load(CKPT_FILE,'CKPT');
         CKPT = S.CKPT;
-        RESUME = true; 
+        RESUME = true;
         RESUME_STAGE = string(CKPT.stage);
         fprintf('>>> RESUME detected | stage=%s | done_points=%d | runs_done_global=%d\n', ...
             RESUME_STAGE, CKPT.done_points, CKPT.runs_done_global);
@@ -43,27 +120,33 @@ if isfile(CKPT_FILE)
     end
 end
 
-% Persist log to disk as well
+% Persist log em disco:
+% - Útil para auditoria de performance/ETA e para entender crashs
 diary(fullfile(CKPT_DIR, sprintf('runlog_%s.txt', datestr(now,'yyyymmdd_HHMMss'))));
 
-% ------------------------ Model Tags/Params ------------------------
+%% ------------------------ Model Tags/Params ------------------------
+% IMPORTANTE: esses nomes devem bater com o .mph
 STUDY_TAG   = 'std1';
+
 PARAM_HAU   = 'h_au';
 PARAM_HCEY  = 'h_ceyig';
 PARAM_LDOM  = 'L_domain';
 PARAM_LDEN  = 'l_dente';
 PARAM_HSI   = 'h_si';
+
 ALPHA_NAME  = 'alpha';
 MSIGN_NAME  = 'm';
 M_PLUS      = '1';
 M_MINUS     = '-1';
 
-% ---- RESULT TABLE TAGS (will be created if missing)
+% Tags das tabelas onde as respostas são escritas (R+ e R-)
+% - o código garante criação se não existirem
 RPLUS_TABLE_TAG  = 'tblRplus';
 RMINUS_TABLE_TAG = 'tblRminus';
 
-% ------------------------ COARSE grids (exact) ---------------------
-% Loop order: L_domain -> l_dente -> h_si -> h_ceyig -> h_au
+%% ------------------------ COARSE grids (exact) ---------------------
+% COARSE = varredura ampla (barata) para “achar regiões”
+% Ordem dos loops: L_domain -> l_dente -> h_si -> h_ceyig -> h_au
 Ldomain_grid_nm = 800:50:850;         % 3
 ldente_grid_nm  = 500:50:600;         % 3
 hsi_grid_nm     = [220, 240, 260];    % 3
@@ -71,55 +154,81 @@ hcey_grid_nm    = [100, 140];         % 2
 hau_grid_nm     = 20:10:60;           % 5
 % COARSE points = 3*3*3*2*5 = 270  -> runs = 270 * 2 (m=±1)
 
-% ---------------------- Alpha ranges/steps -------------------------
-alpha_coarse_rng = [0, 1.0, 89];  % full sweep for COARSE (start, step, stop)
-alpha_fine_step  = 0.1;           % FINE window step
-alpha_super_step = 0.01;          % SUPERFINE window step
-alpha_dense_step = 0.01;          % final/validation
-alpha_full_step  = 0.01;          % final curve
+%% ---------------------- Alpha ranges/steps -------------------------
+% alpha_coarse_rng = [start, step, stop] para o sweep completo do COARSE.
+% FINE/SUPERFINE usam windows centradas no pico do seed para reduzir custo.
+alpha_coarse_rng = [0, 1.0, 89];  % COARSE: 0:1:89 (sweep completo)
+alpha_fine_step  = 0.1;           % FINE alpha-step dentro da janela
+alpha_super_step = 0.01;          % SUPERFINE alpha-step dentro da janela
+alpha_dense_step = 0.01;          % VALID (denso)
+alpha_full_step  = 0.01;          % FULL (final)
 
-% ----------------------- TOP-K strategy ---------------------------
+%% ----------------------- TOP-K strategy ----------------------------
+% TOPK controla quantos seeds “sobrevivem” de um estágio para o seguinte.
+% Aqui está “agressivo” (TOP-1), para manter muito abaixo de 20k runs.
 TOPK_COARSE = 1;   % refine around 1 seed
 TOPK_FINE   = 1;
 
-% --------------------- Refinement windows -------------------------
-% FINE param windows
+%% --------------------- Refinement windows --------------------------
+% Janelas de refinamento em parâmetros:
+% - FINE: janelas moderadas
+% - SUPERFINE: janelas mais estreitas (refino final)
 fine_hau_delta   = 2;    fine_hau_step   = 1;
 fine_hcey_delta  = 5;    fine_hcey_step  = 1;
 fine_Ldom_delta  = 10;   fine_Ldom_step  = 5;
 fine_Lden_delta  = 10;   fine_Lden_step  = 5;
 fine_hsi_delta   = 5;    fine_hsi_step   = 5;
 
-% SUPERFINE param windows
 super_hau_delta  = 1;    super_hau_step  = 0.5;
 super_hcey_delta = 2;    super_hcey_step = 1;
 super_Ldom_delta = 4;    super_Ldom_step = 2;
 super_Lden_delta = 4;    super_Lden_step = 2;
 super_hsi_delta  = 2;    super_hsi_step  = 1;
 
-% ------------------ Alpha windows (centered at last peak) ----------
+%% ------------------ Alpha windows (centered at last peak) ----------
+% Janelas em alpha para reduzir custo:
+% - Em vez de varrer 0:89 toda vez, varremos só em torno do pico
 FINE_ALPHA_HALFSPAN   = 5;     % ±5° (step 0.1)
 SUPER_ALPHA_HALFSPAN  = 2;     % ±2° (step 0.01)
 
-% ----------------------- Outputs / Plots ---------------------------
+%% ----------------------- Outputs / Plots ---------------------------
+% Flags principais do pipeline
 SAVE_SNAPSHOT = true;
 MAKE_PLOTS    = true;
 PLOT_LIVE     = true;
 
-% ------------------------- Load model ------------------------------
+%% ----------------------- Save figures (FINAL) ----------------------
+% Salvar figuras no final (sem mexer na lógica do pipeline):
+% - salva TODAS as figures abertas (inclui live plot)
+SAVE_FIGS   = true;
+FIG_FORMATS = {'png','pdf'};  % png (rápido) + pdf vetorial (artigo)
+
+RUN_STAMP = datestr(now,'yyyy-mm-dd_HHMMSS');
+FIG_DIR   = fullfile(homeDir,'plots', ['tmoke_5d_' RUN_STAMP]);
+if SAVE_FIGS && ~exist(FIG_DIR,'dir'), mkdir(FIG_DIR); end
+
+%% ------------------------- Load model ------------------------------
+% Carrega o COMSOL e habilita progress do solver
 ModelUtil.clear;
 model = mphload(mph_file);
 ModelUtil.showProgress(true);
 
+%% ==================================================================
+%           GLOBAL PLANNING (ETA: estimate first, exact later)
 % ==================================================================
-%           GLOBAL PLANNING (show estimate now, exact later)
-% ==================================================================
-t0 = tic;                            % global clock
+% Aqui nós calculamos o custo total:
+% - COARSE é exato (grade fixa)
+% - FINE começa estimado e vira EXATO depois que o seed “clampa” limites
+% - SUPERFINE é exato
+% - EXTRAS são exatos (VALID + snapshot opcional + FULL)
+t0 = tic;                            % relógio global do pipeline
 runs_done_global = 0;
-is_total_exact   = false;            % start with estimate
+
+% Total global começa como estimado e vira exato depois do planejamento do FINE.
+is_total_exact   = false;
 grand_total_target = NaN; %#ok<NASGU>
 
-% ---- COARSE (exact) ----
+% ---- COARSE (exato) ----
 nL = numel(Ldomain_grid_nm);
 nD = numel(ldente_grid_nm);
 nS = numel(hsi_grid_nm);
@@ -129,7 +238,7 @@ nH = numel(hau_grid_nm);
 coarse_total_pts  = nL*nD*nS*nG*nH;         % 270
 coarse_total_runs = 2 * coarse_total_pts;   % m=±1
 
-% ---- FINE (estimated before seed clamp) ----
+% ---- FINE (estimado antes do clamp) ----
 fine_H = 1 + floor(2*fine_hau_delta   / fine_hau_step);
 fine_G = 1 + floor(2*fine_hcey_delta  / fine_hcey_step);
 fine_L = 1 + floor(2*fine_Ldom_delta  / fine_Ldom_step);
@@ -139,7 +248,7 @@ fine_pts_per_seed_est = fine_L*fine_D*fine_S*fine_G*fine_H;
 fine_total_pts_est    = TOPK_COARSE * fine_pts_per_seed_est;
 fine_total_runs_est   = 2 * fine_total_pts_est;
 
-% ---- SUPERFINE (exact upfront) ----
+% ---- SUPERFINE (exato upfront) ----
 super_H = 1 + floor(2*super_hau_delta   / super_hau_step);
 super_G = 1 + floor(2*super_hcey_delta  / super_hcey_step);
 super_L = 1 + floor(2*super_Ldom_delta  / super_Ldom_step);
@@ -149,7 +258,7 @@ super_pts_per_seed = super_L*super_D*super_S*super_G*super_H;
 super_total_pts    = TOPK_FINE * super_pts_per_seed;
 super_total_runs   = 2 * super_total_pts;
 
-% ---- EXTRAS (exact) ----
+% ---- EXTRAS (exatos) ----
 extras_runs_fixed = 0;
 extras_runs_fixed = extras_runs_fixed + 2;  % dense validation (m=±1)
 if SAVE_SNAPSHOT
@@ -157,7 +266,7 @@ if SAVE_SNAPSHOT
 end
 extras_runs_fixed = extras_runs_fixed + 2;  % final curve (m=±1)
 
-% ---- Initial estimate for global total & header ----
+% ---- Total global inicial (estimado) ----
 grand_total_target = coarse_total_runs + fine_total_runs_est + super_total_runs + extras_runs_fixed;
 is_total_exact = false;
 
@@ -168,15 +277,20 @@ fprintf('  SUPER  (exact):    %d runs (TOP-%d)\n', super_total_runs, TOPK_FINE);
 fprintf('  EXTRAS (exact):    %d runs\n', extras_runs_fixed);
 fprintf('  TOTAL  (estimate): %d runs\n\n', grand_total_target);
 
-% ==================================================================
+%% ==================================================================
 %                              COARSE
 % ==================================================================
-Tcoarse = []; 
+% COARSE: objetivo é varrer toda a grade ampla e capturar “o melhor pico”.
+% Métrica em COARSE:
+%   - maxAbsTMOKE: máximo de |TMOKE(alpha)| ao longo do sweep completo
+%   - alpha_at_peak_deg: alpha onde esse pico ocorre (seed para FINE)
+Tcoarse = [];
 seeds   = [];
 
 skip_COARSE = RESUME && any(strcmp(RESUME_STAGE, ["FINE","SUPER","VALID","FULL"]));
 if skip_COARSE
-    % Restore from checkpoint and bypass COARSE loops entirely
+    % Restore e bypass:
+    % - se já passou do COARSE, não vale re-rodar (custo)
     if isfield(CKPT.payload,'Tcoarse'), Tcoarse = CKPT.payload.Tcoarse; end
     if isfield(CKPT.payload,'seeds'),   seeds   = CKPT.payload.seeds;   end
 
@@ -191,10 +305,14 @@ else
     stage_total_runs = coarse_total_runs;
     stage_t0 = tic;
 
-    Rows = []; % [Ldom, Lden, h_si, h_cey, h_au, max|TM|, alpha*, TM*]
+    % Armazenamento por ponto:
+    % [Ldom, Lden, h_si, h_cey, h_au, max|TM|, alpha*, TM*]
+    Rows = [];
     coarse_point_idx = 0;
 
     if RESUME && RESUME_STAGE=="COARSE"
+        % Retoma do COARSE exatamente:
+        % - pula pontos já calculados (done_points)
         runs_done_global = CKPT.runs_done_global;
         if isfield(CKPT.payload,'Rows'), Rows = CKPT.payload.Rows; end
         coarse_point_idx = CKPT.done_points;
@@ -212,23 +330,27 @@ else
                     for ih = 1:nH
                         setParamNm(model, PARAM_HAU, hau_grid_nm(ih));
 
-                        % flat counter + skip already-done points
+                        % flat counter + skip already done
                         coarse_point_idx = coarse_point_idx + 1;
                         if RESUME && RESUME_STAGE=="COARSE" && coarse_point_idx <= CKPT.done_points
                             continue;
                         end
 
-                        % Full alpha sweep (0:1:89) in COARSE
+                        % Sweep completo em alpha no COARSE:
+                        % - garante que a window está ampla (não perde pico)
                         [a_deg, Rplus, Rminus, TM] = solveAndGetRplusRminus( ...
                             model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
                             alpha_coarse_rng(1), alpha_coarse_rng(2), alpha_coarse_rng(3), ...
                             M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
+                        % Pico absoluto:
+                        % - detecta se o pico encostou na borda (pode indicar window insuficiente)
                         [pk, k] = max(abs(TM));
                         if k==1 || k==numel(TM)
                             logline('WARN COARSE peak at α-edge (α*=%.3f in [%.3f, %.3f])\n', a_deg(k), a_deg(1), a_deg(end));
                         end
 
+                        % Live plot (diagnóstico e acompanhamento)
                         if PLOT_LIVE
                             updateLivePlot('COARSE', ...
                                 Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
@@ -236,12 +358,15 @@ else
                                 a_deg, TM, a_deg(k), TM(k), Rplus, Rminus);
                         end
 
+                        % Guarda resultado deste ponto na lista
                         Rows = [Rows; ...
                             Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
                             hcey_grid_nm(ig), hau_grid_nm(ih), pk, a_deg(k), TM(k)]; %#ok<AGROW>
 
+                        % Cada geometria custa 2 runs (m=±1)
                         runs_done_global = runs_done_global + 2;
 
+                        % ETA de estágio + ETA global (global ainda estimado aqui)
                         stage_done = runs_done_global - stage_runs_start;
                         [frac_stage, eta_stage]   = frac_eta(stage_done, stage_total_runs, toc(stage_t0));
                         [frac_global, eta_global] = frac_eta(runs_done_global, grand_total_target, toc(t0));
@@ -251,7 +376,7 @@ else
                             hcey_grid_nm(ig), hau_grid_nm(ih), pk, a_deg(k), ...
                             100*frac_stage, fmt_time_long(eta_stage), fmt_pct(frac_global), fmt_eta_flag(eta_global, is_total_exact));
 
-                        % -------- checkpoint throttle --------
+                        % Checkpoint throttle (por pontos)
                         points_since_ckpt = points_since_ckpt + 1;
                         payload = struct('Rows',Rows);
                         points_since_ckpt = maybe_checkpoint( ...
@@ -264,23 +389,26 @@ else
         end
     end
 
+    % Converte para tabela (facilita ordenar, salvar e escrever xlsx/csv)
     Tcoarse = array2table(Rows, 'VariableNames', ...
      {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm','maxAbsTMOKE','alpha_at_peak_deg','TMOKE_at_peak'});
 
-    % ---------------------- Select TOP-1 as seed ----------------------
+    % Seleção de seed(s) para o FINE:
+    % - critério: maior |TMOKE| do COARSE
     [~, ordC] = sort(abs(Tcoarse.maxAbsTMOKE), 'descend');
     kkeepC    = min(TOPK_COARSE, numel(ordC));
     seeds     = Tcoarse(ordC(1:kkeepC), :);
 
-    % Stage hand-off checkpoint (to start FINE directly next time)
+    % Checkpoint de hand-off: permite retomar diretamente em FINE
     save_checkpoint(CKPT_FILE, 'FINE', runs_done_global, 0, struct('Tcoarse', Tcoarse, 'seeds', seeds));
     write_progress_xlsx(PROGRESS_XLSX, 'coarse', Tcoarse);
 end
 
-% ==================================================================
+%% ==================================================================
 %                        FINE PLANNING (EXACT NOW)
 % ==================================================================
-% If resuming exactly at FINE, ensure seeds exist
+% A partir daqui, o total global vira EXATO porque:
+% - O FINE depende do seed, e aqui calculamos a contagem exata de pontos
 if isempty(seeds) && RESUME && RESUME_STAGE=="FINE"
     if isfield(CKPT.payload,'seeds')
         seeds = CKPT.payload.seeds;
@@ -289,9 +417,9 @@ if isempty(seeds) && RESUME && RESUME_STAGE=="FINE"
     end
 end
 
-% Compute exact FINE grid (around seeds)
 fine_total_pts = 0;
 for s = 1:height(seeds)
+    % Clamp das listas ao domínio permitido (evita sair do espaço do COARSE)
     Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
     Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
     Llist = max(min(Ldomain_grid_nm), seeds.L_domain_nm(s)- fine_Ldom_delta) : fine_Ldom_step : min(max(Ldomain_grid_nm), seeds.L_domain_nm(s)+ fine_Ldom_delta);
@@ -301,7 +429,7 @@ for s = 1:height(seeds)
 end
 fine_total_runs = 2 * fine_total_pts;
 
-% ---- GRAND TOTAL becomes EXACT from now on ----
+% ---- GRAND TOTAL vira EXATO ----
 grand_total_target = coarse_total_runs + fine_total_runs + super_total_runs + extras_runs_fixed;
 is_total_exact = true;
 
@@ -311,14 +439,16 @@ if grand_total_target > 20000
     error('Planned total exceeds 20k runs (%d). Adjust deltas/grids.', grand_total_target);
 end
 
-% ==================================================================
+%% ==================================================================
 %                                 FINE
 % ==================================================================
-Tfine = []; 
+% FINE: busca local em torno do seed do COARSE
+% - alpha window centrada no alpha_peak do seed (±5°)
+Tfine = [];
 seedsSuper = [];
 
 if RESUME && any(strcmp(RESUME_STAGE, ["SUPER","VALID","FULL"]))
-    % Bypass FINE loops; restore products of FINE
+    % Bypass FINE loops; restaura produtos do FINE
     if isfield(CKPT.payload,'Tfine'),      Tfine = CKPT.payload.Tfine; end
     if isfield(CKPT.payload,'seedsSuper'), seedsSuper = CKPT.payload.seedsSuper; end
     fprintf('SKIP FINE -> restored Tfine (rows=%d), seedsSuper (rows=%d)\n', ...
@@ -339,16 +469,17 @@ else
     end
 
     for s = 1:height(seeds)
-        % Center α window at the COARSE peak of this seed
+        % Centro da janela em alpha vindo do COARSE
         aCenter = seeds.alpha_at_peak_deg(s);
 
+        % Listas clampadas
         Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
         Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
         Llist = max(min(Ldomain_grid_nm), seeds.L_domain_nm(s)- fine_Ldom_delta) : fine_Ldom_step : min(max(Ldomain_grid_nm), seeds.L_domain_nm(s)+ fine_Ldom_delta);
         Dlist = max(min(ldente_grid_nm),  seeds.l_dente_nm(s) - fine_Lden_delta) : fine_Lden_step : min(max(ldente_grid_nm),  seeds.l_dente_nm(s) + fine_Lden_delta);
         Slist = max(min(hsi_grid_nm),     seeds.h_si_nm(s)    - fine_hsi_delta)  : fine_hsi_step  : min(max(hsi_grid_nm),     seeds.h_si_nm(s)    + fine_hsi_delta);
 
-        % --- α window: ±5°, step 0.1 ---
+        % Janela em alpha (±5°)
         aStart = max(0,  aCenter - FINE_ALPHA_HALFSPAN);
         aStop  = min(89, aCenter + FINE_ALPHA_HALFSPAN);
 
@@ -363,7 +494,6 @@ else
                         for ih = 1:numel(Hlist)
                             setParamNm(model, PARAM_HAU, Hlist(ih));
 
-                            % flat counter + skip if needed
                             fine_point_idx = fine_point_idx + 1;
                             if RESUME && RESUME_STAGE=="FINE" && fine_point_idx <= CKPT.done_points
                                 continue;
@@ -398,7 +528,6 @@ else
                                 Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), pk, a_deg(k), ...
                                 100*frac_stage, fmt_time_long(eta_stage), 100*frac_global, fmt_time_long(eta_global));
 
-                            % -------- checkpoint throttle --------
                             points_since_ckpt = points_since_ckpt + 1;
                             payload = struct('FinePeaks',FinePeaks, 'seeds', seeds);
                             points_since_ckpt = maybe_checkpoint( ...
@@ -415,21 +544,19 @@ else
     Tfine = array2table(FinePeaks, 'VariableNames', ...
      {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm','maxAbsTMOKE','alpha_at_peak_deg','TMOKE_at_peak'});
 
-    % ------------------- TOP-1 for SUPERFINE --------------------------
+    % TOP-1 para SUPERFINE
     [~, ordF]   = sort(abs(Tfine.maxAbsTMOKE), 'descend');
     kkeepF      = min(TOPK_FINE, numel(ordF));
     seedsSuper  = Tfine(ordF(1:kkeepF), :);
 
-    % Stage hand-off: allow resuming directly at SUPER
     save_checkpoint(CKPT_FILE, 'SUPER', runs_done_global, 0, struct( ...
         'Tcoarse', Tcoarse, 'Tfine', Tfine, 'seedsSuper', seedsSuper));
     write_progress_xlsx(PROGRESS_XLSX, 'fine', Tfine);
 end
 
-% ==================================================================
+%% ==================================================================
 %                     SUPERFINE PLANNING (EXACT)
 % ==================================================================
-% If resuming exactly at SUPER, ensure seedsSuper exist
 if isempty(seedsSuper) && RESUME && RESUME_STAGE=="SUPER"
     if isfield(CKPT.payload,'seedsSuper')
         seedsSuper = CKPT.payload.seedsSuper;
@@ -452,15 +579,15 @@ super_total_runs = 2 * super_total_pts;
 fprintf('\nSTAGE SUPER — EXACT: %d runs (TOP-%d)\n', super_total_runs, height(seedsSuper));
 fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', grand_total_target);
 
-% ==================================================================
+%% ==================================================================
 %                             SUPERFINE
 % ==================================================================
-Tsuper = []; 
+% SUPERFINE: refinamento final (janelas menores) para encontrar o “melhor dos melhores”
+Tsuper = [];
 Ldom_best=[]; Lden_best=[]; hsi_best=[]; hcey_best=[]; hau_best=[];
 alpha_best=[]; tmoke_best=[];
 
 if RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
-    % Bypass SUPER loops; restore Tsuper and best 5D
     if isfield(CKPT.payload,'Tsuper'),     Tsuper = CKPT.payload.Tsuper; end
     if isfield(CKPT.payload,'Ldom_best'),  Ldom_best  = CKPT.payload.Ldom_best; end
     if isfield(CKPT.payload,'Lden_best'),  Lden_best  = CKPT.payload.Lden_best; end
@@ -484,7 +611,6 @@ else
     end
 
     for s = 1:height(seedsSuper)
-        % Center α window at the FINE peak
         aCenter = seedsSuper.alpha_at_peak_deg(s);
 
         Hlist = (seedsSuper.h_au_nm(s)    - super_hau_delta)  : super_hau_step  : (seedsSuper.h_au_nm(s)    + super_hau_delta);
@@ -493,7 +619,7 @@ else
         Dlist = (seedsSuper.l_dente_nm(s) - super_Lden_delta) : super_Lden_step : (seedsSuper.l_dente_nm(s) + super_Lden_delta);
         Slist = (seedsSuper.h_si_nm(s)    - super_hsi_delta)  : super_hsi_step  : (seedsSuper.h_si_nm(s)    + super_hsi_delta);
 
-        % --- α window: ±2°, step 0.01 ---
+        % Janela alpha (±2°)
         aStart = max(0,  aCenter - SUPER_ALPHA_HALFSPAN);
         aStop  = min(89, aCenter + SUPER_ALPHA_HALFSPAN);
 
@@ -508,7 +634,6 @@ else
                         for ih = 1:numel(Hlist)
                             setParamNm(model, PARAM_HAU, Hlist(ih));
 
-                            % flat counter + skip
                             super_point_idx = super_point_idx + 1;
                             if RESUME && RESUME_STAGE=="SUPER" && super_point_idx <= CKPT.done_points
                                 continue;
@@ -543,7 +668,6 @@ else
                                 Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), pk, a_deg(k), ...
                                 100*frac_stage, fmt_time_long(eta_stage), 100*frac_global, fmt_time_long(eta_global));
 
-                            % -------- checkpoint throttle --------
                             points_since_ckpt = points_since_ckpt + 1;
                             payload = struct('SuperPeaks',SuperPeaks, 'seedsSuper', seedsSuper);
                             points_since_ckpt = maybe_checkpoint( ...
@@ -560,7 +684,7 @@ else
     Tsuper = array2table(SuperPeaks, 'VariableNames', ...
      {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm','maxAbsTMOKE','alpha_at_peak_deg','TMOKE_at_peak'});
 
-    % ------------------ Best of SUPERFINE -----------------------------
+    % Melhor ponto do SUPERFINE (critério: maior |TMOKE|)
     [~, bestIdx] = max(abs(Tsuper.maxAbsTMOKE));
     Ldom_best  = Tsuper.L_domain_nm(bestIdx);
     Lden_best  = Tsuper.l_dente_nm(bestIdx);
@@ -573,7 +697,6 @@ else
     logline('SUPER  | BEST => Ldom=%4.0f nm | Lden=%4.0f nm | h_si=%3.0f nm | h_ceyig=%.3f nm | h_au=%.3f nm | |TM|=%.6f @ α≈%.4f°\n', ...
         Ldom_best, Lden_best, hsi_best, hcey_best, hau_best, abs(tmoke_best), alpha_best);
 
-    % Stage hand-off to VALID
     save_checkpoint(CKPT_FILE, 'VALID', runs_done_global, 0, struct( ...
         'Tcoarse', Tcoarse, 'Tfine', Tfine, 'Tsuper', Tsuper, ...
         'Ldom_best', Ldom_best, 'Lden_best', Lden_best, 'hsi_best', hsi_best, ...
@@ -581,14 +704,16 @@ else
     write_progress_xlsx(PROGRESS_XLSX, 'super', Tsuper);
 end
 
-% ==================================================================
+%% ==================================================================
 %                     Dense validation (α=0:0.01:89)
 % ==================================================================
-% Restore best 5D when resuming at VALID/FULL
+% VALID: reavalia melhor ponto com sweep denso para “confirmar”:
+% - alpha_best verdadeiro (pode deslocar um pouco)
+% - tmoke_best verdadeiro (mais confiável)
 if isempty(Ldom_best) && RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
-    Ldom_best = CKPT.payload.Ldom_best; 
+    Ldom_best = CKPT.payload.Ldom_best;
     Lden_best = CKPT.payload.Lden_best;
-    hsi_best  = CKPT.payload.hsi_best;  
+    hsi_best  = CKPT.payload.hsi_best;
     hcey_best = CKPT.payload.hcey_best;
     hau_best  = CKPT.payload.hau_best;
 end
@@ -604,9 +729,9 @@ setParamNm(model, PARAM_HAU,  hau_best);
 
 runs_done_global = runs_done_global + 2;
 
-[~, kV]   = max(abs(TM_dense));
-alpha_best  = a_dense(kV);
-tmoke_best  = TM_dense(kV);
+[~, kV]    = max(abs(TM_dense));
+alpha_best = a_dense(kV);
+tmoke_best = TM_dense(kV);
 
 logline('VALID  | BEST(true) => Ldom=%4.0f nm | Lden=%4.0f nm | h_si=%3.0f nm | h_ceyig=%.3f nm | h_au=%.3f nm | |TM|=%.6f @ α=%.4f°\n', ...
     Ldom_best, Lden_best, hsi_best, hcey_best, hau_best, abs(tmoke_best), alpha_best);
@@ -622,16 +747,17 @@ BestDense = table( ...
    a_dense(:), Rp_dense(:), Rm_dense(:), TM_dense(:), ...
    'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm','alpha_deg','Rplus','Rminus','TMOKE'});
 
-% Checkpoint hand-off to FULL now that dense validation is ready
 save_checkpoint(CKPT_FILE, 'FULL', runs_done_global, 0, struct( ...
     'BestDense', BestDense, 'Ldom_best', Ldom_best, 'Lden_best', Lden_best, ...
     'hsi_best', hsi_best, 'hcey_best', hcey_best, 'hau_best', hau_best, ...
     'alpha_best', alpha_best, 'tmoke_best', tmoke_best));
 write_progress_xlsx(PROGRESS_XLSX, 'dense', BestDense);
 
-% ==================================================================
+%% ==================================================================
 %                           Snapshot (optional)
 % ==================================================================
+% Snapshot .mph do melhor ponto:
+% - útil para abrir no COMSOL e inspecionar resultados/campos
 if SAVE_SNAPSHOT
     setAlphaMSweep(model, STUDY_TAG, ALPHA_NAME, alpha_best, 0.01, alpha_best, MSIGN_NAME, sprintf('%s %s', M_PLUS, M_MINUS));
     model.study(STUDY_TAG).run;
@@ -647,9 +773,10 @@ if SAVE_SNAPSHOT
     logline('Snapshot saved: %s\n', snap_name);
 end
 
-% ==================================================================
+%% ==================================================================
 %             Final "pretty" curve (α=0:0.01:89) at best 5D
 % ==================================================================
+% FULL: curva final no melhor ponto (é a saída “bonita” do trabalho)
 [a_full, Rp_full, Rm_full, TM_full] = solveAndGetRplusRminus( ...
     model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, 0, alpha_full_step, 89, M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
@@ -667,20 +794,20 @@ BestFull  = table( ...
    a_full(:), Rp_full(:), Rm_full(:), TM_full(:), ...
    'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm','alpha_deg','Rplus','Rminus','TMOKE'});
 
-% ==================================================================
+%% ==================================================================
 %                              CSVs
 % ==================================================================
+% Exporta resultados finais para uso fora do MATLAB (Excel, Python, etc.)
 if ~isempty(Tcoarse), writetable(Tcoarse, fullfile(homeDir,'tmoke_grid_5D_coarse.csv')); end
 if ~isempty(Tfine),   writetable(Tfine,   fullfile(homeDir,'tmoke_5D_fine_candidates.csv')); end
 if ~isempty(Tsuper),  writetable(Tsuper,  fullfile(homeDir,'tmoke_5D_superfine_candidates.csv')); end
 writetable(BestDense, fullfile(homeDir,'tmoke_best_5D_dense_alpha_0_89_step0p01.csv'));
 writetable(BestFull,  fullfile(homeDir,'tmoke_best_5D_full_alpha_0_89_step0p01.csv'));
 
-% Also store final sheets into XLSX and remove checkpoint (clean finish)
 write_progress_xlsx(PROGRESS_XLSX, 'full', BestFull);
 if isfile(CKPT_FILE), delete(CKPT_FILE); end
 
-% ==================================================================
+%% ==================================================================
 %                           FINAL SUMMARY
 % ==================================================================
 elapsed_total = toc(t0);
@@ -694,16 +821,33 @@ fprintf('  |TMOKE|*        : %.6f\n', abs(tmoke_best));
 fprintf('  Runs            : %d / %d (Global %5.1f%%)\n', runs_done_global, grand_total_target, 100*frac_global_end);
 fprintf('  Elapsed         : %s\n', fmt_time_long(elapsed_total));
 
+%% ==================================================================
+%                       SAVE ALL FIGURES (FINAL)
 % ==================================================================
+% Não altera a lógica do pipeline: só exporta o que estiver aberto no final.
+if SAVE_FIGS
+    saveAllOpenFigures(FIG_DIR, "tmoke_5d", FIG_FORMATS);
+    fprintf('  Figures saved    : %s\n', FIG_DIR);
+end
+
+% Encerra o diary para garantir flush no arquivo de log
+diary off;
+
+%% ==================================================================
 %                           LOCAL FUNCTIONS
 % ==================================================================
+
 function setParamNm(mdl, name, val_nm)
+    % Setter com unidade [nm] para consistência e evitar bugs de unidade.
     mdl.param.set(name, sprintf('%.12g[nm]', val_nm));
 end
 
 function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mPlusStr, mMinusStr, ttagPlus, ttagMinus)
-    % Run α sweep for m=+1 (-> ttagPlus) and m=-1 (-> ttagMinus).
+    % Executa sweep em alpha para m=+1 e m=-1 e devolve:
+    % - alpha_deg: grade de alpha (deg)
+    % - Rplus, Rminus: reflectância total para m=+1 e m=-1
+    % - TMOKE: (R+ - R-)/(R+ + R-), com proteção para denom ~ 0
     ensureTable(mdl, ttagPlus);
     ensureTable(mdl, ttagMinus);
 
@@ -738,6 +882,8 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
 end
 
 function setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mStr)
+    % Configura o Parametric Sweep do Study para (alpha, m).
+    % Observação: range() do COMSOL precisa de unidades no string.
     ptag = getParametricTag(mdl, studyTag);
     mdl.study(studyTag).feature(ptag).set('pname', {alphaName, mName});
     mdl.study(studyTag).feature(ptag).set('punit', {'deg','1'});
@@ -746,6 +892,8 @@ function setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, 
 end
 
 function ptag = getParametricTag(mdl, studyTag)
+    % Descobre qual feature do Study é o "Parametric Sweep".
+    % Fallback: 'param' (comum em muitos modelos)
     ptag = 'param';
     try
         fts = cell(mdl.study(studyTag).feature().tags());
@@ -758,6 +906,7 @@ function ptag = getParametricTag(mdl, studyTag)
 end
 
 function refreshDerivedValues(mdl)
+    % Garante que os nodes "Derived Values" atualizem as tabelas.
     try
         ntags = cell(mdl.result().numerical().tags());
         for k = 1:numel(ntags)
@@ -768,6 +917,7 @@ function refreshDerivedValues(mdl)
 end
 
 function ensureTable(mdl, ttag)
+    % Garante a existência da tabela ttag (cria se faltar).
     try
         mdl.result().table(ttag);
     catch
@@ -776,10 +926,12 @@ function ensureTable(mdl, ttag)
 end
 
 function clearTable(mdl, ttag)
+    % Limpa tabela para evitar acumular runs e atrapalhar leitura por Npts.
     try mdl.result().table(ttag).clearTableData; catch, end
 end
 
 function redirectAllNumericalsToTable(mdl, ttag)
+    % Redireciona todos os "numerical" nodes do Result para a tabela ttag.
     try
         ntags = cell(mdl.result().numerical().tags());
         for k = 1:numel(ntags)
@@ -790,6 +942,8 @@ function redirectAllNumericalsToTable(mdl, ttag)
 end
 
 function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
+    % Lê mphtable e tenta localizar colunas por header.
+    % Fallback seguro: colunas 1 e 2.
     S = mphtable(mdl, ttag);
 
     heads = [];
@@ -826,11 +980,12 @@ function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
         if any(contains(hlow, '(rad)')) || any(contains(hlow, '[rad]')), a = a * 180/pi; end
     end
 
-    alpha_deg = a; 
+    alpha_deg = a;
     Rcol      = R;
 end
 
 function s = fmt_time_long(sec)
+    % Formata tempo em dd HH:MM:SS quando necessário (leitura fácil).
     if ~isfinite(sec) || sec < 0, s = '...'; return; end
     days = floor(sec/86400);
     rem  = sec - 86400*days;
@@ -846,6 +1001,8 @@ function s = fmt_time_long(sec)
 end
 
 function [frac, eta] = frac_eta(done, total, elapsed)
+    % Retorna fração concluída e ETA estimado via regra de três:
+    % ETA ≈ elapsed/frac - elapsed
     if ~isfinite(total) || total <= 0
         frac = NaN; eta = NaN; return;
     end
@@ -858,6 +1015,7 @@ function [frac, eta] = frac_eta(done, total, elapsed)
 end
 
 function s = fmt_eta_flag(eta, is_exact)
+    % Mostra (est.) quando o total global ainda não é exato.
     if ~isfinite(eta), s = 'N/A'; else, s = fmt_time_long(eta); end
     if ~is_exact, s = [s ' (est.)']; end
 end
@@ -872,6 +1030,7 @@ function logline(varargin)
 end
 
 function setAlphaMSweep(mdl, studyTag, alphaName, aStartDeg, aStepDeg, aStopDeg, mName, mListStr)
+    % Helper para configurar sweep (alpha, m) com lista de m (ex.: "+1 -1")
     ptag = getParametricTag(mdl, studyTag);
     mdl.study(studyTag).feature(ptag).set('pname', {alphaName, mName});
     mdl.study(studyTag).feature(ptag).set('punit', {'deg','1'});
@@ -881,20 +1040,21 @@ end
 
 % ==================== Checkpoint helper functions ===================
 function save_checkpoint(CKPT_FILE, stage, runs_done_global, done_points, payload)
-% Atomic save to avoid corruption on power loss
+% Salva checkpoint de forma “atômica” para reduzir risco de corrupção
+% (salva em .tmp e move para o final).
     CKPT.stage            = char(stage);       % 'COARSE' | 'FINE' | 'SUPER' | 'VALID' | 'FULL'
     CKPT.runs_done_global = runs_done_global;
-    CKPT.done_points      = done_points;       % flat counter inside the current stage
-    CKPT.payload          = payload;           % stage-specific data
+    CKPT.done_points      = done_points;       % flat counter do estágio atual
+    CKPT.payload          = payload;           % dados específicos do estágio
     tmp = [CKPT_FILE '.tmp'];
     save(tmp,'CKPT','-v7.3');
     movefile(tmp, CKPT_FILE, 'f');
 end
 
 function write_progress_xlsx(PROGRESS_XLSX, varargin)
-% varargin: pairs ('coarse',Tcoarse), ('fine',Tfine), ('super',Tsuper),
-%           ('dense',BestDense), ('full',BestFull)
-% Overwrites sheets with the latest snapshot; safe to call often.
+% Escreve snapshots em XLSX (uma sheet por estágio). Pode falhar em:
+% - arquivo aberto no Excel (lock)
+% - permissões de escrita
     for i=1:2:numel(varargin)
         sheet = varargin{i}; T = varargin{i+1};
         if ~isempty(T)
@@ -911,25 +1071,27 @@ function points_since_ckpt_new = maybe_checkpoint( ...
         stage, every_points, CKPT_FILE, PROGRESS_XLSX, ...
         runs_done_global, points_since_ckpt, done_points, payload, ...
         Tcoarse, Tfine, Tsuper, BestDense, BestFull)
-% Call from innermost loops. If threshold reached, saves checkpoint + XLSX.
+% Chamado dentro do loop mais interno.
+% Quando atinge o limiar, salva checkpoint + XLSX snapshots.
     points_since_ckpt_new = points_since_ckpt;
     if points_since_ckpt >= every_points
         save_checkpoint(CKPT_FILE, stage, runs_done_global, done_points, payload);
-        % Write human-readable progress (xlsx) snapshots
         try
             write_progress_xlsx(PROGRESS_XLSX, ...
                 'coarse', Tcoarse, 'fine', Tfine, 'super', Tsuper, ...
                 'dense', BestDense, 'full', BestFull);
         catch
         end
-        points_since_ckpt_new = 0; % reset
+        points_since_ckpt_new = 0;
     end
 end
 
 function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
                         alpha_deg, TMOKE_vec, alpha_peak, tmoke_peak, ...
                         Rplus, Rminus)
-% Live plot: TMOKE (left axis) and R+ / R- (right axis) vs alpha.
+% Live plot:
+% - Eixo esquerdo: TMOKE(alpha) + marcador do pico
+% - Eixo direito:  R+(alpha) e R-(alpha)
     persistent fig ax hTM hPeak hRp hRm inited
     if isempty(inited) || ~isvalidHandle(fig) || ~isvalidHandle(ax) || ...
        isempty(hTM)   || ~isvalidHandle(hTM)   || ...
@@ -938,20 +1100,18 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
        isempty(hRm)   || ~isvalidHandle(hRm)
 
         fig = figure('Name','TMOKE vs \alpha (live)', ...
-                     'NumberTitle','off','Tag','TMOKE_LIVE_FIG');
-        ax  = axes('Parent',fig,'Tag','TMOKE_LIVE_AX'); 
-        grid(ax,'on'); 
+                     'NumberTitle','off','Tag','TMOKE_LIVE_FIG', 'Color','w');
+        ax  = axes('Parent',fig,'Tag','TMOKE_LIVE_AX');
+        grid(ax,'on');
         hold(ax,'on');
 
-        % Left axis: TMOKE curve + peak marker
         yyaxis(ax,'left');
         hTM   = plot(ax, nan, nan, '-', 'LineWidth', 1.2, 'DisplayName','TMOKE(\alpha)');
         hPeak = plot(ax, nan, nan, 'o', 'MarkerSize', 6, 'DisplayName','peak TMOKE');
-        ylabel(ax,'TMOKE'); 
-        xlim(ax,[0 89]); 
+        ylabel(ax,'TMOKE');
+        xlim(ax,[0 89]);
         xlabel(ax,'\alpha [deg]');
 
-        % Right axis: R+ and R-
         yyaxis(ax,'right');
         hRp = plot(ax, nan, nan, '--', 'LineWidth', 1.0, 'DisplayName','R^+(\alpha)');
         hRm = plot(ax, nan, nan, ':',  'LineWidth', 1.0, 'DisplayName','R^-(\alpha)');
@@ -961,12 +1121,10 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
         inited = true;
     end
 
-    % Update left axis (TMOKE + peak)
     yyaxis(ax,'left');
     set(hTM,   'XData', alpha_deg, 'YData', TMOKE_vec);
     set(hPeak, 'XData', alpha_peak, 'YData', tmoke_peak);
 
-    % Update right axis (R+, R-), if provided
     yyaxis(ax,'right');
     if nargin >= 12 && ~isempty(Rplus) && ~isempty(Rminus)
         set(hRp, 'XData', alpha_deg, 'YData', Rplus);
@@ -984,4 +1142,71 @@ end
 
 function tf = isvalidHandle(h)
     tf = ~isempty(h) && isvalid(h);
+end
+
+%% ======================= FIGURE SAVE HELPERS =========================
+function saveAllOpenFigures(outDir, prefix, formats)
+% Salva TODAS as figuras abertas no MATLAB (inclui live plot).
+% - outDir: pasta de saída
+% - prefix: prefixo dos arquivos
+% - formats: ex {'png','pdf'}
+    if ~exist(outDir,'dir'), mkdir(outDir); end
+
+    figs = findall(0,'Type','figure');
+    if isempty(figs)
+        fprintf('>> No figures to save.\n');
+        return;
+    end
+
+    % Ordena por número para saída previsível
+    [~, idx] = sort([figs.Number]);
+    figs = figs(idx);
+
+    for i = 1:numel(figs)
+        fig = figs(i);
+
+        figName = string(get(fig,'Name'));
+        figTag  = string(get(fig,'Tag'));
+        if strlength(figName)==0
+            if strlength(figTag)>0
+                figName = figTag;
+            else
+                figName = "Figure_" + string(fig.Number);
+            end
+        end
+
+        base = string(prefix) + "__" + string(sanitizeFilename(figName));
+
+        % Fundo branco ajuda exportação e padroniza
+        try set(fig,'Color','w'); catch, end
+
+        for k = 1:numel(formats)
+            ext = lower(string(formats{k}));
+            filePath = fullfile(outDir, base + "." + ext);
+
+            try
+                switch ext
+                    case "png"
+                        exportgraphics(fig, filePath, 'Resolution', 300);
+                    case "pdf"
+                        exportgraphics(fig, filePath, 'ContentType','vector');
+                    case "eps"
+                        exportgraphics(fig, filePath, 'ContentType','vector');
+                    otherwise
+                        saveas(fig, filePath);
+                end
+            catch ME
+                warning('Falha ao salvar %s: %s', filePath, ME.message);
+            end
+        end
+    end
+
+    fprintf('>> %d figure(s) saved in: %s\n', numel(figs), outDir);
+end
+
+function s = sanitizeFilename(str)
+% Sanitiza para Windows: remove caracteres proibidos e compacta underscores
+    s = regexprep(char(str), '[^\w\d\-]+', '_');
+    s = regexprep(s, '_+', '_');
+    s = regexprep(s, '^_|_$', '');
 end
