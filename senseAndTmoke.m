@@ -1,111 +1,89 @@
 %% =====================================================================
-% MATLAB + COMSOL — 5D Hierarchical Search (TMOKE + Sensibilidade S)
+% MATLAB + COMSOL - 5D Hierarchical Search (TMOKE + angular sensitivity)
 % ---------------------------------------------------------------------
-% OBJETIVO (em 1 frase):
-%   Encontrar a melhor geometria 5D que seja boa ao mesmo tempo em:
-%     (A) |TMOKE|max  e  (B) Sensibilidade angular S = d(alpha_peak)/dn [deg/RIU]
+% Goal (one line):
+%   Find the 5D geometry that simultaneously maximizes (A) |TMOKE| and
+%   (B) angular sensitivity S = d(alpha_peak)/dn [deg/RIU].
 %
-% COMO ESTE SCRIPT “JUNTA” OS DOIS CÓDIGOS:
-% ---------------------------------------------------------------------
-% Antes você tinha 2 pipelines separados:
-%   1) Otimização por TMOKE (max |TMOKE|)   -> barato (2 runs por ponto)
-%   2) Otimização por sensibilidade S(n)    -> caro (>= 2*#n runs por ponto)
+% How this script merges the two original pipelines:
+%   1) TMOKE optimization (max |TMOKE|)      -> cheap (2 runs per point)
+%   2) Sensitivity S(n) optimization         -> expensive (>= 2*#n runs)
 %
-% Aqui, em CADA ponto de geometria (COARSE/FINE/SUPER), nós calculamos:
-%   - Métrica TMOKE:  maxAbsTMOKE_base = max(|TMOKE(alpha)|) para n_base
-%   - Métrica Sens.:  S_est = (alpha_peak(n2) - alpha_peak(n1)) / (n2 - n1)
-%                    usando APENAS 2 valores de n (rápido) durante a busca.
+% For every geometry point (COARSE/FINE/SUPER) we compute both metrics:
+%   - TMOKE metric:    maxAbsTMOKE_base = max(|TMOKE(alpha)|) at baselineRefractiveIndex
+%   - Sensitivity est: sensitivityEstimateFast = (alpha_peak(n2) - alpha_peak(n1)) / (n2 - n1)
+%                      using only two refractive indices (fast estimate).
 %
-% Depois (VALID), no melhor ponto final, calculamos S “de verdade” com 3 n:
-%   - n_valid = [1.33 1.36 1.39] (ou o que você quiser)
-%   - S_dense = slope do fit linear alpha_peak vs n (deg/RIU)
+% In the VALID stage, on the best candidate, we recompute sensitivity with
+% a denser set of refractive indices:
+%   - validationRefractiveIndexList = [1.33 1.36 1.39] (configurable)
+%   - sensitivityDense = slope of alpha_peak vs n (deg/RIU) from linear fit.
 %
-% SELEÇÃO “MELHOR DOS DOIS” (trade-off):
-% ---------------------------------------------------------------------
-% Em cada estágio (COARSE/FINE/SUPER), nós ranqueamos os candidatos por:
-%   - rank_TM = rank de |TMOKE|max (maior é melhor)
-%   - rank_S  = rank de |S_est|     (maior é melhor)
-%   - score_comb = rank_TM + rank_S   (menor score = melhor trade-off)
+% Trade-off selection:
+%   In each stage (COARSE/FINE/SUPER) candidates are ranked by:
+%     - rank_TM = rank of |TMOKE|max (higher is better)
+%     - rank_S  = rank of |sensitivityEstimateFast| (higher is better)
+%     - score_comb = rank_TM + rank_S  (smaller score = better trade-off)
+%   This yields:
+%     - bestTradeoffCandidate: best compromise between TMOKE and S
+%     - bestTmokeCandidate: best only in TMOKE
+%     - bestSensitivityCandidate: best only in sensitivity
 %
-% Assim você obtém:
-%   - best_tradeoff: melhor compromisso (TMOKE e S juntos)
-%   - best_TMOKE: melhor só em TMOKE
-%   - best_S: melhor só em sensibilidade
-%
-% FLUXOGRAMA (alto nível)
-% ---------------------------------------------------------------------
-% [Start] -> Load .mph -> (Resume checkpoint?)
-%   |
-%   v
-% [COARSE]  (varre grade ampla; para cada ponto calcula TMOKE e S_est)
-%   |
-%   v
-% Seleciona seeds TOP-K (pelo score_comb)
-%   |
-%   v
-% [FINE]    (refina parâmetros + janela alpha; recalcula TMOKE e S_est)
-%   |
-%   v
-% Seleciona seeds TOP-K (pelo score_comb)
-%   |
-%   v
-% [SUPER]   (refino final; recalcula TMOKE e S_est)
-%   |
-%   v
-% Escolhe best_tradeoff + best_TMOKE + best_S
-%   |
-%   v
-% [VALID]   (no best_tradeoff: curva densa para n_valid e calcula S_dense)
-%   |
-%   v
-% [FULL]    (curva final (baseline) e exporta CSV/XLSX)
-%   |
-%   v
-% [SAVE FIGURES] (exporta todas as figures abertas)
-%   |
-%   v
-% [End]
+% High-level flow:
+%   Start -> Load .mph -> (optional resume from checkpoint)
+%     -> COARSE (sweep wide grid, compute TMOKE + sensitivityEstimateFast)
+%     -> pick TOP-K seeds (trade-off score)
+%     -> FINE   (refine geometry + alpha window, recompute metrics)
+%     -> pick TOP-K seeds (trade-off score)
+%     -> SUPER  (final refinement, recompute metrics)
+%     -> choose bestTradeoffCandidate + bestTmokeCandidate + bestSensitivityCandidate
+%     -> VALID  (dense curves on bestTradeoffCandidate to compute sensitivityDense)
+%     -> FULL   (final baseline curve + CSV/XLSX export)
+%     -> SAVE FIGURES
+%     -> End
 % =====================================================================
-
-clear; clc; close all; format long; tic
-import com.comsol.model.*;
-import com.comsol.model.util.*;
+clear; clc; close all; format long; tic   % Reset state, close figures, use long format, start overall timer
+import com.comsol.model.*;               % Import COMSOL model classes
+import com.comsol.model.util.*;          % Import COMSOL utility helpers
 
 %% --------------------------- Paths/Project -------------------------
-homeDir  = 'C:\Users\gabri\Documents\projetoIC';
-mph_file = fullfile(homeDir,'usandoMatlab.mph');
-addpath(genpath(homeDir));
+projectRootDir  = 'C:\Users\gabri\Documents\projetoIC';       % Root folder that holds the COMSOL project and outputs
+comsolModelFile = fullfile(projectRootDir,'usandoMatlab.mph');          % COMSOL model file to open
+addpath(genpath(projectRootDir));                                       % Expose all helper scripts in the project to MATLAB
 
-%% ------------------------ Run budget (opcional) ---------------------
-% Mantém o “espírito” do script TMOKE (< 20k). Agora, como calculamos S_est
-% (2 valores de n) em cada ponto, o custo por ponto dobra.
+%% ------------------------ Run budget (optional) ---------------------
+% Keep the spirit of the original TMOKE script: stop if the total planned
+% number of COMSOL runs exceeds this budget (fast sensitivity doubles cost).
 MAX_RUNS = 20000;
 
 %% ------------------------ Checkpoint config -------------------------
-CKPT_DIR          = fullfile(homeDir,'checkpoints');
-if ~exist(CKPT_DIR,'dir'), mkdir(CKPT_DIR); end
-CKPT_FILE         = fullfile(CKPT_DIR,'tmoke_sens_5d_checkpoint.mat');
-PROGRESS_XLSX     = fullfile(CKPT_DIR,'tmoke_sens_progress.xlsx');
+checkpointDirectory   = fullfile(projectRootDir,'checkpoints');         % Folder where checkpoints and logs are written
+if ~exist(checkpointDirectory,'dir'), mkdir(checkpointDirectory); end   % Create checkpoint folder if it does not exist
+checkpointFilePath    = fullfile(checkpointDirectory,'tmoke_sens_5d_checkpoint.mat'); % Binary checkpoint file
+progressWorkbookPath  = fullfile(checkpointDirectory,'tmoke_sens_progress.xlsx');     % Human-friendly Excel progress log
 
-CKPT_EVERY_POINTS = 10;      % salva a cada 10 pontos (não a cada run)
-points_since_ckpt = 0;
+checkpointEveryPoints = 10;                                             % Save progress every N evaluated geometry points
+pointsSinceCheckpoint = 0;                                              % Counter since the last checkpoint write
 
 %% ------------------------ Resume / Runlog ---------------------------
-RESUME = false; CKPT = struct; RESUME_STAGE = "";
-if isfile(CKPT_FILE)
+resumeFromCheckpoint = false;                                           % Flag: resume from previous checkpoint+/-
+checkpointData = struct;                                                % Struct holding restored checkpoint payload
+resumeStageTag = "";                                                    % Stage name captured when resuming
+if isfile(checkpointFilePath)
+    % If a checkpoint exists, restore run counters/tables to continue where the last run stopped.
     try
-        S = load(CKPT_FILE,'CKPT');
-        CKPT = S.CKPT;
-        RESUME = true;
-        RESUME_STAGE = string(CKPT.stage);
-        fprintf('>>> RESUME detected | stage=%s | done_points=%d | runs_done_global=%d\n', ...
-            RESUME_STAGE, CKPT.done_points, CKPT.runs_done_global);
+        checkpointFileContents = load(checkpointFilePath,'checkpointData'); % Load only the checkpointData variable
+        checkpointData = checkpointFileContents.checkpointData;             % Extract saved struct from disk
+        resumeFromCheckpoint = true;                                        % Flip resume flag because checkpoint exists
+        resumeStageTag = string(checkpointData.stage);                      % Stage name recorded when the checkpoint was saved
+        fprintf('>>> resumeFromCheckpoint detected | stage=%s | done_points=%d | runsCompletedGlobal=%d\\n', ...
+            resumeStageTag, checkpointData.done_points, checkpointData.runsCompletedGlobal);
     catch
         warning('Checkpoint exists but could not be loaded. Starting fresh.');
     end
 end
 
-diary(fullfile(CKPT_DIR, sprintf('runlog_%s.txt', datestr(now,'yyyymmdd_HHMMss'))));
+diary(fullfile(checkpointDirectory, sprintf('runlog_%s.txt', datestr(now,'yyyymmdd_HHMMss')))); % Persistent run log
 
 %% ------------------------ Model Tags/Params -------------------------
 STUDY_TAG   = 'std1';
@@ -125,247 +103,263 @@ M_MINUS     = '-1';
 RPLUS_TABLE_TAG  = 'tblRplus';
 RMINUS_TABLE_TAG = 'tblRminus';
 
-%% --------------------- Índices de refração (n) ----------------------
-% Durante a busca (COARSE/FINE/SUPER):
-% - usamos 2 pontos de n para estimar S rápido (S_est)
-% - n_base também é o usado para a métrica de TMOKE (maxAbsTMOKE_base)
-n_fast   = [1.33, 1.39];         % <<< S_est rápido (2 pontos)
-n_base   = n_fast(1);            % <<< TMOKE “base” (pode trocar se quiser)
+%% --------------------- Refractive indices (n) ----------------------
+% During the search stages (COARSE/FINE/SUPER):
+% - use 2 refractive indices to estimate S quickly (sensitivityEstimateFast)
+% - baselineRefractiveIndex is also used for the TMOKE metric (maxAbsTMOKE_base)
+fastRefractiveIndexSamples = [1.33, 1.39];           % Two n values used for the quick sensitivity estimate
+baselineRefractiveIndex    = fastRefractiveIndexSamples(1); % Baseline n for TMOKE sweeps (change if needed)
 
-% Na validação final (VALID):
-% - usamos 3 pontos (ou mais) para S_dense mais confiável
-n_valid  = [1.33, 1.36, 1.39];
+% During the final validation stage (VALID):
+% - use 3 (or more) refractive indices to compute sensitivityDense reliably
+validationRefractiveIndexList = [1.33, 1.36, 1.39];
+
 
 %% ------------------------ COARSE grids (exact) ----------------------
-Ldomain_grid_nm = 800:50:850;         % 3
-ldente_grid_nm  = 500:50:600;         % 3
-hsi_grid_nm     = [220, 240, 260];    % 3
-hcey_grid_nm    = [100, 140];         % 2
-hau_grid_nm     = 20:10:60;           % 5
+domainPeriodGridNm = 800:50:850;         % 3
+toothWidthGridNm  = 500:50:600;         % 3
+siliconHeightGridNm     = [220, 240, 260];    % 3
+ceyigHeightGridNm    = [100, 140];         % 2
+goldHeightGridNm     = 20:10:60;           % 5
 % COARSE points = 270
 
 %% ---------------------- Alpha ranges/steps --------------------------
-alpha_coarse_rng = [0, 1.0, 89];  % COARSE sweep completo
-alpha_fine_step  = 0.1;           % FINE step
-alpha_super_step = 0.01;          % SUPERFINE step
-alpha_dense_step = 0.01;          % VALID step
-alpha_full_step  = 0.01;          % FULL step
+alphaCoarseRange = [0, 1.0, 89];  % Coarse sweep: start [deg], step [deg], stop [deg]
+alphaFineStep  = 0.1;             % Fine alpha step [deg]
+alphaSuperStep = 0.01;            % Superfine alpha step [deg]
+alphaDenseStep = 0.01;            % Validation alpha step [deg]
+alphaFullStep  = 0.01;            % Final baseline alpha step [deg]
 
 %% ----------------------- TOP-K strategy ----------------------------
-TOPK_COARSE = 1;
-TOPK_FINE   = 1;
+topKCoarse = 1;   % Number of coarse candidates promoted to the fine stage
+topKFine   = 1;   % Number of fine candidates promoted to the superfine stage
 
 %% --------------------- Refinement windows --------------------------
-fine_hau_delta   = 2;    fine_hau_step   = 1;
-fine_hcey_delta  = 5;    fine_hcey_step  = 1;
-fine_Ldom_delta  = 10;   fine_Ldom_step  = 5;
-fine_Lden_delta  = 10;   fine_Lden_step  = 5;
-fine_hsi_delta   = 5;    fine_hsi_step   = 5;
+fineGoldHeightDelta   = 2;    fineGoldHeightStep   = 1;
+fineCeyigHeightDelta  = 5;    fineCeyigHeightStep  = 1;
+fineDomainPeriodDelta = 10;   fineDomainPeriodStep = 5;
+fineToothWidthDelta   = 10;   fineToothWidthStep   = 5;
+fineSiliconHeightDelta= 5;    fineSiliconHeightStep= 5;
 
-super_hau_delta  = 1;    super_hau_step  = 0.5;
-super_hcey_delta = 2;    super_hcey_step = 1;
-super_Ldom_delta = 4;    super_Ldom_step = 2;
-super_Lden_delta = 4;    super_Lden_step = 2;
-super_hsi_delta  = 2;    super_hsi_step  = 1;
+superGoldHeightDelta  = 1;    superGoldHeightStep  = 0.5;
+superCeyigHeightDelta = 2;    superCeyigHeightStep = 1;
+superDomainPeriodDelta = 4;   superDomainPeriodStep = 2;
+superToothWidthDelta   = 4;   superToothWidthStep   = 2;
+superSiliconHeightDelta= 2;   superSiliconHeightStep= 1;
 
 %% ------------------ Alpha windows (centered at last peak) ----------
-FINE_ALPHA_HALFSPAN   = 5;     % TMOKE window nominal no FINE
-SUPER_ALPHA_HALFSPAN  = 2;     % TMOKE window nominal no SUPER
+fineAlphaHalfSpan   = 5;     % Nominal TMOKE window half-span for FINE stage [deg]
+superAlphaHalfSpan  = 2;     % Nominal TMOKE window half-span for SUPER stage [deg]
 
-% Para sensibilidade, é comum o alpha_peak deslocar um pouco com n.
-% Então usamos uma janela levemente maior para calcular S_est com segurança.
-FINE_ALPHA_HALFSPAN_SENS  = FINE_ALPHA_HALFSPAN  + 1;   % ±6°
-SUPER_ALPHA_HALFSPAN_SENS = SUPER_ALPHA_HALFSPAN + 2;   % ±4°
+% The alpha_peak can shift slightly with refractive index, so use slightly
+% wider windows when estimating sensitivity to avoid missing the peak.
+fineAlphaHalfSpanSensitivity  = fineAlphaHalfSpan  + 1;   % +/-6 deg margin for sensitivity sweeps
+superAlphaHalfSpanSensitivity = superAlphaHalfSpan + 2;   % +/-4 deg margin for sensitivity sweeps
 
 %% ----------------------- Outputs / Plots ----------------------------
-SAVE_SNAPSHOT = true;
-MAKE_PLOTS    = true;
-PLOT_LIVE     = true;
+SAVE_SNAPSHOT = true;   % Save a COMSOL snapshot of the final bestTradeoffCandidate
+MAKE_PLOTS    = true;   % Render final plots after computations
+PLOT_LIVE     = true;   % Update a live TMOKE figure during sweeps (slower)
 
 %% ----------------------- Save figures (FINAL) -----------------------
-SAVE_FIGS   = true;
-FIG_FORMATS = {'png','pdf'};
-RUN_STAMP   = datestr(now,'yyyy-mm-dd_HHMMSS');
-FIG_DIR     = fullfile(homeDir,'plots', ['tmoke_sens_5d_' RUN_STAMP]);
-if SAVE_FIGS && ~exist(FIG_DIR,'dir'), mkdir(FIG_DIR); end
+SAVE_FIGS   = true;                                     % Persist all open figures to disk at the end
+FIG_FORMATS = {'png','pdf'};                            % Formats to export for each figure
+runTimestamp   = datestr(now,'yyyy-mm-dd_HHMMSS');      % Unique run tag for plot folders
+figureOutputDirectory     = fullfile(projectRootDir,'plots', ['tmoke_sens_5d_' runTimestamp]);
+if SAVE_FIGS && ~exist(figureOutputDirectory,'dir'), mkdir(figureOutputDirectory); end
 
 %% ------------------------- Load model ------------------------------
-ModelUtil.clear;
-model = mphload(mph_file);
-ModelUtil.showProgress(true);
+ModelUtil.clear;                        % Clear any previous COMSOL models from memory
+model = mphload(comsolModelFile);       % Load the COMSOL model to be driven
+ModelUtil.showProgress(true);           % Show COMSOL progress in the MATLAB console
 
 %% ==================================================================
 %                    GLOBAL PLANNING (runs / ETA)
+% ------------------------------------------------------------------
+% Compute exact/estimated run counts for each stage to:
+%   - enforce the MAX_RUNS budget,
+%   - show stage/global ETAs while sweeping,
+%   - size refinement windows up front.
+% These counters are updated as each point is solved.
 % ==================================================================
-t0 = tic;
-runs_done_global = 0;
-is_total_exact   = false;
+globalTimerStart = tic;
+runsCompletedGlobal = 0;
+isTotalRunEstimateExact   = false;
 
-nL = numel(Ldomain_grid_nm);
-nD = numel(ldente_grid_nm);
-nS = numel(hsi_grid_nm);
-nG = numel(hcey_grid_nm);
-nH = numel(hau_grid_nm);
+numDomainPeriodPoints = numel(domainPeriodGridNm);      % Number of values in the domain-period grid
+numToothWidthPoints   = numel(toothWidthGridNm);        % Number of tooth-width samples
+numSiliconHeightPoints= numel(siliconHeightGridNm);     % Number of silicon-height samples
+numCeyigHeightPoints  = numel(ceyigHeightGridNm);       % Number of Ce:YIG-height samples
+numGoldHeightPoints   = numel(goldHeightGridNm);        % Number of gold-height samples
 
-% Cada n precisa de 2 runs (m=±1). Durante a busca usamos n_fast (2 valores).
-runs_per_point_search = 2 * numel(n_fast);     % 4 runs por ponto
+% Each refractive index requires 2 runs (m = +/-1). Searching uses two n values.
+runsPerSearchPoint = 2 * numel(fastRefractiveIndexSamples);     % 4 runs per geometry point
 
-coarse_total_pts  = nL*nD*nS*nG*nH;
-coarse_total_runs = runs_per_point_search * coarse_total_pts;
+coarseTotalPoints  = numDomainPeriodPoints*numToothWidthPoints*numSiliconHeightPoints*numCeyigHeightPoints*numGoldHeightPoints;
+coarseTotalRuns = runsPerSearchPoint * coarseTotalPoints;
 
-% Estimativas do FINE (antes do clamp exato)
-fine_H = 1 + floor(2*fine_hau_delta   / fine_hau_step);
-fine_G = 1 + floor(2*fine_hcey_delta  / fine_hcey_step);
-fine_L = 1 + floor(2*fine_Ldom_delta  / fine_Ldom_step);
-fine_D = 1 + floor(2*fine_Lden_delta  / fine_Lden_step);
-fine_S = 1 + floor(2*fine_hsi_delta   / fine_hsi_step);
-fine_pts_per_seed_est = fine_L*fine_D*fine_S*fine_G*fine_H;
-fine_total_pts_est    = TOPK_COARSE * fine_pts_per_seed_est;
-fine_total_runs_est   = runs_per_point_search * fine_total_pts_est;
+% Fine-stage estimates (before exact clamping)
+fineGoldHeightCount = 1 + floor(2*fineGoldHeightDelta   / fineGoldHeightStep);
+fineCeyigHeightCount = 1 + floor(2*fineCeyigHeightDelta  / fineCeyigHeightStep);
+fineDomainPeriodCount = 1 + floor(2*fineDomainPeriodDelta  / fineDomainPeriodStep);
+fineToothWidthCount = 1 + floor(2*fineToothWidthDelta  / fineToothWidthStep);
+fineSiliconHeightCount = 1 + floor(2*fineSiliconHeightDelta   / fineSiliconHeightStep);
+finePointsPerSeedEstimate = fineDomainPeriodCount*fineToothWidthCount*fineSiliconHeightCount*fineCeyigHeightCount*fineGoldHeightCount;
+fineTotalPointsEstimate    = topKCoarse * finePointsPerSeedEstimate;
+fineTotalRunsEstimate   = runsPerSearchPoint * fineTotalPointsEstimate;
 
-% SUPERFINE (exato upfront)
-super_H = 1 + floor(2*super_hau_delta   / super_hau_step);
-super_G = 1 + floor(2*super_hcey_delta  / super_hcey_step);
-super_L = 1 + floor(2*super_Ldom_delta  / super_Ldom_step);
-super_D = 1 + floor(2*super_Lden_delta  / super_Lden_step);
-super_S = 1 + floor(2*super_hsi_delta   / super_hsi_step);
-super_pts_per_seed = super_L*super_D*super_S*super_G*super_H;
-super_total_pts    = TOPK_FINE * super_pts_per_seed;
-super_total_runs   = runs_per_point_search * super_total_pts;
+% Superfine counts (exact upfront)
+superGoldHeightCount = 1 + floor(2*superGoldHeightDelta   / superGoldHeightStep);
+superCeyigHeightCount = 1 + floor(2*superCeyigHeightDelta  / superCeyigHeightStep);
+superDomainPeriodCount = 1 + floor(2*superDomainPeriodDelta  / superDomainPeriodStep);
+superToothWidthCount = 1 + floor(2*superToothWidthDelta  / superToothWidthStep);
+superSiliconHeightCount = 1 + floor(2*superSiliconHeightDelta   / superSiliconHeightStep);
+superPointsPerSeed = superDomainPeriodCount*superToothWidthCount*superSiliconHeightCount*superCeyigHeightCount*superGoldHeightCount;
+superTotalPoints    = topKFine * superPointsPerSeed;
+superTotalRuns   = runsPerSearchPoint * superTotalPoints;
 
-% EXTRAS:
-% - VALID: 2 runs por n_valid (m=±1) => 2*len(n_valid)
-% - snapshot: 2 runs (m=±1) num alpha fixo no n_base
-% - FULL: 2 runs (m=±1) sweep completo no n_base
-extras_runs_fixed = 2*numel(n_valid) + (SAVE_SNAPSHOT*2) + 2;
+% Extra runs that always happen:
+% - VALID: 2 runs per validationRefractiveIndexList element (m = +/-1) => 2*len(validationRefractiveIndexList)
+% - snapshot: 2 runs (m = +/-1) at a fixed alpha in baselineRefractiveIndex
+% - FULL: 2 runs (m = +/-1) full sweep at baselineRefractiveIndex
+extraRunsFixed = 2*numel(validationRefractiveIndexList) + (SAVE_SNAPSHOT*2) + 2;
 
-grand_total_target = coarse_total_runs + fine_total_runs_est + super_total_runs + extras_runs_fixed;
-is_total_exact = false;
+globalRunTargetEstimate = coarseTotalRuns + fineTotalRunsEstimate + superTotalRuns + extraRunsFixed;
+isTotalRunEstimateExact = false;
 
 fprintf('START\n');
-fprintf('  COARSE (exact):    %d runs\n', coarse_total_runs);
-fprintf('  FINE   (estimate): %d runs (TOP-%d)\n', fine_total_runs_est, TOPK_COARSE);
-fprintf('  SUPER  (exact):    %d runs (TOP-%d)\n', super_total_runs, TOPK_FINE);
-fprintf('  EXTRAS (exact):    %d runs\n', extras_runs_fixed);
-fprintf('  TOTAL  (estimate): %d runs\n\n', grand_total_target);
+fprintf('  COARSE (exact):    %d runs\n', coarseTotalRuns);
+fprintf('  FINE   (estimate): %d runs (TOP-%d)\n', fineTotalRunsEstimate, topKCoarse);
+fprintf('  SUPER  (exact):    %d runs (TOP-%d)\n', superTotalRuns, topKFine);
+fprintf('  EXTRAS (exact):    %d runs\n', extraRunsFixed);
+fprintf('  TOTAL  (estimate): %d runs\n\n', globalRunTargetEstimate);
 
 %% ==================================================================
 %                               COARSE
 % ==================================================================
-Tcoarse = [];
-seeds   = [];
+% Sweep the full coarse geometry grid. For each geometry point:
+%   1) Set geometry parameters.
+%   2) Sweep alpha at fastRefractiveIndexSamples(1) to find TMOKE peak and peak angle.
+%   3) Sweep alpha at fastRefractiveIndexSamples(2) to estimate sensitivity from the peak shift.
+%   4) Log metrics, update ETAs, and checkpoint periodically.
+% Outputs:
+%   - coarseResultsTable: metrics for every coarse point.
+%   - coarseSeedCandidates: TOP-K seeds ranked by combined TMOKE/sensitivity score.
+coarseResultsTable = [];
+coarseSeedCandidates   = [];
 
-skip_COARSE = RESUME && any(strcmp(RESUME_STAGE, ["FINE","SUPER","VALID","FULL"]));
-if skip_COARSE
-    if isfield(CKPT.payload,'Tcoarse'), Tcoarse = CKPT.payload.Tcoarse; end
-    if isfield(CKPT.payload,'seeds'),   seeds   = CKPT.payload.seeds;   end
-    fprintf('SKIP COARSE -> restored Tcoarse (rows=%d), seeds (rows=%d)\n', ...
-        size(Tcoarse,1), height(seeds));
+skipCoarseStage = resumeFromCheckpoint && any(strcmp(resumeStageTag, ["FINE","SUPER","VALID","FULL"]));
+if skipCoarseStage
+    % When resuming past COARSE, restore previous coarse results/seeds instead of recomputing.
+    if isfield(checkpointData.payload,'coarseResultsTable'), coarseResultsTable = checkpointData.payload.coarseResultsTable; end
+    if isfield(checkpointData.payload,'coarseSeedCandidates'),   coarseSeedCandidates   = checkpointData.payload.coarseSeedCandidates;   end
+    fprintf('SKIP COARSE -> restored coarseResultsTable (rows=%d), coarseSeedCandidates (rows=%d)\n', ...
+        size(coarseResultsTable,1), height(coarseSeedCandidates));
 else
-    fprintf('STAGE COARSE — EXACT: %d runs\n', coarse_total_runs);
-    stage_runs_start = runs_done_global;
-    stage_total_runs = coarse_total_runs;
-    stage_t0 = tic;
+    fprintf('STAGE COARSE - EXACT: %d runs\n', coarseTotalRuns);  % Full coarse grid, no estimates here
+    stageRunsStart = runsCompletedGlobal;
+    stageTotalRuns = coarseTotalRuns;
+    stageTimerStart = tic;
 
     % Colunas:
     % [Ldom, Lden, hsi, hcey, hau,
     %  maxAbsTMOKE_base, alpha_peak_base, TMOKE_at_peak_base,
-    %  alpha_peak_n2, S_est]
-    Rows = [];
-    coarse_point_idx = 0;
+    %  alpha_peak_n2, sensitivityEstimateFast]
+    coarseRows = [];
+    coarsePointIndex = 0;
 
-    if RESUME && RESUME_STAGE=="COARSE"
-        runs_done_global = CKPT.runs_done_global;
-        if isfield(CKPT.payload,'Rows'), Rows = CKPT.payload.Rows; end
-        coarse_point_idx = CKPT.done_points;
-        fprintf('>>> COARSE resume: skipping %d points already computed.\n', coarse_point_idx);
+    if resumeFromCheckpoint && resumeStageTag=="COARSE"
+        runsCompletedGlobal = checkpointData.runsCompletedGlobal;
+        if isfield(checkpointData.payload,'coarseRows'), coarseRows = checkpointData.payload.coarseRows; end
+        coarsePointIndex = checkpointData.done_points;
+        fprintf('>>> COARSE resume: skipping %d points already computed.\n', coarsePointIndex);
     end
 
-    for iL = 1:nL
-        setParamNm(model, PARAM_LDOM, Ldomain_grid_nm(iL));
-        for iD = 1:nD
-            setParamNm(model, PARAM_LDEN, ldente_grid_nm(iD));
-            for iS = 1:nS
-                setParamNm(model, PARAM_HSI, hsi_grid_nm(iS));
-                for ig = 1:nG
-                    setParamNm(model, PARAM_HCEY, hcey_grid_nm(ig));
-                    for ih = 1:nH
-                        setParamNm(model, PARAM_HAU, hau_grid_nm(ih));
+    for domainPeriodIdx = 1:numDomainPeriodPoints
+        setParamNm(model, PARAM_LDOM, domainPeriodGridNm(domainPeriodIdx));
+        for toothWidthIdx = 1:numToothWidthPoints
+            setParamNm(model, PARAM_LDEN, toothWidthGridNm(toothWidthIdx));
+            for siliconHeightIdx = 1:numSiliconHeightPoints
+                setParamNm(model, PARAM_HSI, siliconHeightGridNm(siliconHeightIdx));
+                for ceyigHeightIdx = 1:numCeyigHeightPoints
+                    setParamNm(model, PARAM_HCEY, ceyigHeightGridNm(ceyigHeightIdx));
+                    for goldHeightIdx = 1:numGoldHeightPoints
+                        setParamNm(model, PARAM_HAU, goldHeightGridNm(goldHeightIdx));
 
-                        coarse_point_idx = coarse_point_idx + 1;
-                        if RESUME && RESUME_STAGE=="COARSE" && coarse_point_idx <= CKPT.done_points
+                        coarsePointIndex = coarsePointIndex + 1;
+                        if resumeFromCheckpoint && resumeStageTag=="COARSE" && coarsePointIndex <= checkpointData.done_points
                             continue;
                         end
 
                         % =======================
-                        % (1) n = n_fast(1) (base)
+                        % (1) n = fastRefractiveIndexSamples(1) (base)
                         % =======================
-                        setParamScalar(model, PARAM_N, n_fast(1)); % n sem unidade
-                        [a1, Rp1, Rm1, TM1] = solveAndGetRplusRminus( ...
+                        setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1)); % n sem unidade
+                        [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
                             model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                            alpha_coarse_rng(1), alpha_coarse_rng(2), alpha_coarse_rng(3), ...
+                            alphaCoarseRange(1), alphaCoarseRange(2), alphaCoarseRange(3), ...
                             M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                        [pk1, k1] = max(abs(TM1));
-                        alpha1 = a1(k1);
-                        tm_at_pk1 = TM1(k1);
+                        [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
+                        alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
+                        tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
 
-                        if k1==1 || k1==numel(TM1)
-                            logline('WARN COARSE (n=%.2f) peak at α-edge (α*=%.3f in [%.3f, %.3f])\n', ...
-                                n_fast(1), alpha1, a1(1), a1(end));
+                        if tmokePeakIndexFastN1==1 || tmokePeakIndexFastN1==numel(tmokeCurveFastN1)
+                            logline('WARN COARSE (n=%.2f) peak at alpha-edge (alpha*=%.3f in [%.3f, %.3f])\n', ...
+                                fastRefractiveIndexSamples(1), alphaAtPeakFastN1, alphaGridFastN1(1), alphaGridFastN1(end));
                         end
 
                         if PLOT_LIVE
                             updateLivePlot('COARSE', ...
-                                Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
-                                hcey_grid_nm(ig), hau_grid_nm(ih), ...
-                                a1, TM1, alpha1, tm_at_pk1, Rp1, Rm1);
+                                domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
+                                ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
+                                alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
                         end
 
                         % ======================
-                        % (2) n = n_fast(2) (p/ S_est)
+                        % (2) n = fastRefractiveIndexSamples(2) (alphaVsNLinearFit/ sensitivityEstimateFast)
                         % ======================
-                        setParamScalar(model, PARAM_N, n_fast(2));
-                        [a2, ~, ~, TM2] = solveAndGetRplusRminus( ...
+                        setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
+                        [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
                             model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                            alpha_coarse_rng(1), alpha_coarse_rng(2), alpha_coarse_rng(3), ...
+                            alphaCoarseRange(1), alphaCoarseRange(2), alphaCoarseRange(3), ...
                             M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                        [~, k2] = max(abs(TM2));
-                        alpha2 = a2(k2);
+                        [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
+                        alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
 
-                        % Sensibilidade rápida (2 pontos)
-                        S_est = (alpha2 - alpha1) / (n_fast(2) - n_fast(1));
+% Quick sensitivity estimate using 2 points
+                        sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
-                        % Guarda ponto
-                        Rows = [Rows; ...
-                            Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
-                            hcey_grid_nm(ig), hau_grid_nm(ih), ...
-                            pk1, alpha1, tm_at_pk1, ...
-                            alpha2, S_est]; %#ok<AGROW>
+                        % Store candidate point data
+                        coarseRows = [coarseRows; ...
+                            domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
+                            ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
+                            tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, ...
+                            alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
 
-                        % Custo do ponto: 2*n_fast runs (m=±1 para cada n)
-                        runs_done_global = runs_done_global + runs_per_point_search;
+% Point cost: 2*fastRefractiveIndexSamples runs (m=+/-1 for each n)
+                        runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
 
                         % ETA
-                        stage_done = runs_done_global - stage_runs_start;
-                        [frac_stage, eta_stage]   = frac_eta(stage_done, stage_total_runs, toc(stage_t0));
-                        [frac_global, eta_global] = frac_eta(runs_done_global, grand_total_target, toc(t0));
+                        stageRunsCompleted = runsCompletedGlobal - stageRunsStart;
+                        [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
+                        [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
 
                         logline(['COARSE | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
-                                 ' | |TM|=%.5f @ α=%.2f° | S_est=%.4f deg/RIU' ...
+                                 ' | |TM|=%.5f @ alpha=%.2f deg | sensitivityEstimateFast=%.4f deg/RIU' ...
                                  ' [Stage %5.1f%% | ETA %s | Global %s%% | ETA %s]\n'], ...
-                            Ldomain_grid_nm(iL), ldente_grid_nm(iD), hsi_grid_nm(iS), ...
-                            hcey_grid_nm(ig), hau_grid_nm(ih), ...
-                            pk1, alpha1, S_est, ...
-                            100*frac_stage, fmt_time_long(eta_stage), fmt_pct(frac_global), fmt_eta_flag(eta_global, is_total_exact));
+                            domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
+                            ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
+                            tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                            100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), fmt_pct(globalCompletionFraction), fmt_eta_flag(globalEtaSeconds, isTotalRunEstimateExact));
 
                         % Checkpoint
-                        points_since_ckpt = points_since_ckpt + 1;
-                        payload = struct('Rows',Rows);
-                        points_since_ckpt = maybe_checkpoint( ...
-                            'COARSE', CKPT_EVERY_POINTS, CKPT_FILE, PROGRESS_XLSX, ...
-                            runs_done_global, points_since_ckpt, coarse_point_idx, payload, ...
+                        pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
+                        payload = struct('coarseRows',coarseRows);
+                        pointsSinceCheckpoint = maybe_checkpoint( ...
+                            'COARSE', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                            runsCompletedGlobal, pointsSinceCheckpoint, coarsePointIndex, payload, ...
                             [], [], [], [], []);
                     end
                 end
@@ -373,158 +367,166 @@ else
         end
     end
 
-    Tcoarse = array2table(Rows, 'VariableNames', ...
+    coarseResultsTable = array2table(coarseRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
          'alpha_peak_n2_deg','S_est_deg_per_RIU'});
 
-    % Seleção TOP-K por score combinado (rank TMOKE + rank |S|)
-    seeds = selectTopK_tradeoff(Tcoarse, TOPK_COARSE, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
+% TOP-K selection using combined score (rank TMOKE + rank |S|)
+    coarseSeedCandidates = selectTopK_tradeoff(coarseResultsTable, topKCoarse, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
 
-    save_checkpoint(CKPT_FILE, 'FINE', runs_done_global, 0, struct('Tcoarse', Tcoarse, 'seeds', seeds));
-    write_progress_xlsx(PROGRESS_XLSX, 'coarse', Tcoarse);
+    save_checkpoint(checkpointFilePath, 'FINE', runsCompletedGlobal, 0, struct('coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates));
+    write_progress_xlsx(progressWorkbookPath, 'coarse', coarseResultsTable);
 end
 
 %% ==================================================================
 %                        FINE PLANNING (EXACT NOW)
+% ------------------------------------------------------------------
+% Build exact FINE counts by clamping search windows around the coarse
+% seeds, so the run budget and ETA become exact before starting FINE.
+% Also guards against exceeding MAX_RUNS before any fine sweep is run.
 % ==================================================================
-if isempty(seeds) && RESUME && RESUME_STAGE=="FINE"
-    if isfield(CKPT.payload,'seeds')
-        seeds = CKPT.payload.seeds;
+if isempty(coarseSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="FINE"
+    if isfield(checkpointData.payload,'coarseSeedCandidates')
+        coarseSeedCandidates = checkpointData.payload.coarseSeedCandidates;
     else
-        error('Checkpoint at FINE stage has no "seeds". Rerun COARSE.');
+        error('Checkpoint at FINE stage has no "coarseSeedCandidates". Rerun COARSE.');
     end
 end
 
-% Conta exata do FINE (com clamp)
-fine_total_pts = 0;
-for s = 1:height(seeds)
-    Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
-    Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
-    Llist = max(min(Ldomain_grid_nm), seeds.L_domain_nm(s)- fine_Ldom_delta) : fine_Ldom_step : min(max(Ldomain_grid_nm), seeds.L_domain_nm(s)+ fine_Ldom_delta);
-    Dlist = max(min(ldente_grid_nm),  seeds.l_dente_nm(s) - fine_Lden_delta) : fine_Lden_step : min(max(ldente_grid_nm),  seeds.l_dente_nm(s) + fine_Lden_delta);
-    Slist = max(min(hsi_grid_nm),     seeds.h_si_nm(s)    - fine_hsi_delta)  : fine_hsi_step  : min(max(hsi_grid_nm),     seeds.h_si_nm(s)    + fine_hsi_delta);
-    fine_total_pts = fine_total_pts + numel(Llist)*numel(Dlist)*numel(Slist)*numel(Glist)*numel(Hlist);
+% Exact FINE point count (after clamping to search limits)
+fineTotalPoints = 0;
+for s = 1:height(coarseSeedCandidates)
+    goldHeightList = max(min(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   - fineGoldHeightDelta)  : fineGoldHeightStep  : min(max(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   + fineGoldHeightDelta);
+    ceyigHeightList = max(min(ceyigHeightGridNm), coarseSeedCandidates.h_ceyig_nm(s)- fineCeyigHeightDelta) : fineCeyigHeightStep : min(max(ceyigHeightGridNm), coarseSeedCandidates.h_ceyig_nm(s)+ fineCeyigHeightDelta);
+    domainPeriodList = max(min(domainPeriodGridNm), coarseSeedCandidates.L_domain_nm(s)- fineDomainPeriodDelta) : fineDomainPeriodStep : min(max(domainPeriodGridNm), coarseSeedCandidates.L_domain_nm(s)+ fineDomainPeriodDelta);
+    toothWidthList = max(min(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) - fineToothWidthDelta) : fineToothWidthStep : min(max(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) + fineToothWidthDelta);
+    siliconHeightList = max(min(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    - fineSiliconHeightDelta)  : fineSiliconHeightStep  : min(max(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    + fineSiliconHeightDelta);
+    fineTotalPoints = fineTotalPoints + numel(domainPeriodList)*numel(toothWidthList)*numel(siliconHeightList)*numel(ceyigHeightList)*numel(goldHeightList);
 end
-fine_total_runs = runs_per_point_search * fine_total_pts;
+fineTotalRuns = runsPerSearchPoint * fineTotalPoints;
 
-% Total global vira EXATO agora
-grand_total_target = coarse_total_runs + fine_total_runs + super_total_runs + extras_runs_fixed;
-is_total_exact = true;
+% Global total becomes exact from this point forward
+globalRunTargetEstimate = coarseTotalRuns + fineTotalRuns + superTotalRuns + extraRunsFixed;
+isTotalRunEstimateExact = true;
 
-fprintf('\nSTAGE FINE — EXACT: %d runs (TOP-%d)\n', fine_total_runs, height(seeds));
-fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', grand_total_target);
-if grand_total_target > MAX_RUNS
-    error('Planned total exceeds %d runs (%d). Ajuste deltas/steps/TOPK.', MAX_RUNS, grand_total_target);
+fprintf('\nSTAGE FINE - EXACT: %d runs (TOP-%d)\n', fineTotalRuns, height(coarseSeedCandidates));
+fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
+if globalRunTargetEstimate > MAX_RUNS
+    error('Planned total exceeds %d runs (%d). Adjust deltas/steps/TOPK.', MAX_RUNS, globalRunTargetEstimate);
 end
 
 %% ==================================================================
 %                                 FINE
+% ------------------------------------------------------------------
+% For each coarse seed, sweep refined geometry windows and a narrower
+% alpha range. Recompute TMOKE peak and sensitivity, log ETAs, and
+% checkpoint. Select TOP-K seeds to feed SUPER.
 % ==================================================================
-Tfine = [];
-seedsSuper = [];
+fineResultsTable = [];
+superSeedCandidates = [];
 
-if RESUME && any(strcmp(RESUME_STAGE, ["SUPER","VALID","FULL"]))
-    if isfield(CKPT.payload,'Tfine'),      Tfine = CKPT.payload.Tfine; end
-    if isfield(CKPT.payload,'seedsSuper'), seedsSuper = CKPT.payload.seedsSuper; end
-    fprintf('SKIP FINE -> restored Tfine (rows=%d), seedsSuper (rows=%d)\n', ...
-        size(Tfine,1), height(seedsSuper));
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SUPER","VALID","FULL"]))
+    if isfield(checkpointData.payload,'fineResultsTable'),      fineResultsTable = checkpointData.payload.fineResultsTable; end
+    if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
+    fprintf('SKIP FINE -> restored fineResultsTable (rows=%d), superSeedCandidates (rows=%d)\n', ...
+        size(fineResultsTable,1), height(superSeedCandidates));
 else
-    FineRows = [];
-    stage_runs_start = runs_done_global;
-    stage_total_runs = fine_total_runs;
-    stage_t0 = tic;
+    fineRows = [];
+    stageRunsStart = runsCompletedGlobal;
+    stageTotalRuns = fineTotalRuns;
+    stageTimerStart = tic;
 
-    fine_point_idx = 0;
-    if RESUME && RESUME_STAGE=="FINE" && CKPT.done_points > 0
-        runs_done_global = CKPT.runs_done_global;
-        fine_point_idx   = CKPT.done_points;
-        if isfield(CKPT.payload,'FineRows'), FineRows = CKPT.payload.FineRows; end
-        if isfield(CKPT.payload,'seeds'),    seeds    = CKPT.payload.seeds;    end
-        fprintf('>>> FINE resume: skipping %d points already computed.\n', fine_point_idx);
+    finePointIndex = 0;
+    if resumeFromCheckpoint && resumeStageTag=="FINE" && checkpointData.done_points > 0
+        runsCompletedGlobal = checkpointData.runsCompletedGlobal;
+        finePointIndex   = checkpointData.done_points;
+        if isfield(checkpointData.payload,'fineRows'), fineRows = checkpointData.payload.fineRows; end
+        if isfield(checkpointData.payload,'coarseSeedCandidates'),    coarseSeedCandidates    = checkpointData.payload.coarseSeedCandidates;    end
+        fprintf('>>> FINE resume: skipping %d points already computed.\n', finePointIndex);
     end
 
-    for s = 1:height(seeds)
-        % Centro da janela em alpha vem do pico no n_base do estágio anterior
-        aCenter = seeds.alpha_peak_base_deg(s);
+    for s = 1:height(coarseSeedCandidates)
+        % Alpha window center comes from the previous stage peak at baselineRefractiveIndex
+        alphaWindowCenterDeg = coarseSeedCandidates.alpha_peak_base_deg(s);
 
-        % Clamp dos parâmetros
-        Hlist = max(min(hau_grid_nm),  seeds.h_au_nm(s)   - fine_hau_delta)  : fine_hau_step  : min(max(hau_grid_nm),  seeds.h_au_nm(s)   + fine_hau_delta);
-        Glist = max(min(hcey_grid_nm), seeds.h_ceyig_nm(s)- fine_hcey_delta) : fine_hcey_step : min(max(hcey_grid_nm), seeds.h_ceyig_nm(s)+ fine_hcey_delta);
-        Llist = max(min(Ldomain_grid_nm), seeds.L_domain_nm(s)- fine_Ldom_delta) : fine_Ldom_step : min(max(Ldomain_grid_nm), seeds.L_domain_nm(s)+ fine_Ldom_delta);
-        Dlist = max(min(ldente_grid_nm),  seeds.l_dente_nm(s) - fine_Lden_delta) : fine_Lden_step : min(max(ldente_grid_nm),  seeds.l_dente_nm(s) + fine_Lden_delta);
-        Slist = max(min(hsi_grid_nm),     seeds.h_si_nm(s)    - fine_hsi_delta)  : fine_hsi_step  : min(max(hsi_grid_nm),     seeds.h_si_nm(s)    + fine_hsi_delta);
+        % Clamp parameters to remain inside allowed ranges
+        goldHeightList = max(min(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   - fineGoldHeightDelta)  : fineGoldHeightStep  : min(max(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   + fineGoldHeightDelta);
+        ceyigHeightList = max(min(ceyigHeightGridNm), coarseSeedCandidates.h_ceyig_nm(s)- fineCeyigHeightDelta) : fineCeyigHeightStep : min(max(ceyigHeightGridNm), coarseSeedCandidates.h_ceyig_nm(s)+ fineCeyigHeightDelta);
+        domainPeriodList = max(min(domainPeriodGridNm), coarseSeedCandidates.L_domain_nm(s)- fineDomainPeriodDelta) : fineDomainPeriodStep : min(max(domainPeriodGridNm), coarseSeedCandidates.L_domain_nm(s)+ fineDomainPeriodDelta);
+        toothWidthList = max(min(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) - fineToothWidthDelta) : fineToothWidthStep : min(max(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) + fineToothWidthDelta);
+        siliconHeightList = max(min(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    - fineSiliconHeightDelta)  : fineSiliconHeightStep  : min(max(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    + fineSiliconHeightDelta);
 
-        % Janela de alpha (um pouco maior para S_est)
-        aStart = max(0,  aCenter - FINE_ALPHA_HALFSPAN_SENS);
-        aStop  = min(89, aCenter + FINE_ALPHA_HALFSPAN_SENS);
+        % Alpha sweep window (slightly wider for sensitivity to avoid missing the peak)
+        alphaStartDeg = max(0,  alphaWindowCenterDeg - fineAlphaHalfSpanSensitivity);
+        alphaStopDeg  = min(89, alphaWindowCenterDeg + fineAlphaHalfSpanSensitivity);
 
-        for iL = 1:numel(Llist)
-            setParamNm(model, PARAM_LDOM, Llist(iL));
-            for iD = 1:numel(Dlist)
-                setParamNm(model, PARAM_LDEN, Dlist(iD));
-                for iS = 1:numel(Slist)
-                    setParamNm(model, PARAM_HSI, Slist(iS));
-                    for ig = 1:numel(Glist)
-                        setParamNm(model, PARAM_HCEY, Glist(ig));
-                        for ih = 1:numel(Hlist)
-                            setParamNm(model, PARAM_HAU, Hlist(ih));
+        for domainPeriodIdx = 1:numel(domainPeriodList)
+            setParamNm(model, PARAM_LDOM, domainPeriodList(domainPeriodIdx));
+            for toothWidthIdx = 1:numel(toothWidthList)
+                setParamNm(model, PARAM_LDEN, toothWidthList(toothWidthIdx));
+                for siliconHeightIdx = 1:numel(siliconHeightList)
+                    setParamNm(model, PARAM_HSI, siliconHeightList(siliconHeightIdx));
+                    for ceyigHeightIdx = 1:numel(ceyigHeightList)
+                        setParamNm(model, PARAM_HCEY, ceyigHeightList(ceyigHeightIdx));
+                        for goldHeightIdx = 1:numel(goldHeightList)
+                            setParamNm(model, PARAM_HAU, goldHeightList(goldHeightIdx));
 
-                            fine_point_idx = fine_point_idx + 1;
-                            if RESUME && RESUME_STAGE=="FINE" && fine_point_idx <= CKPT.done_points
+                            finePointIndex = finePointIndex + 1;
+                            if resumeFromCheckpoint && resumeStageTag=="FINE" && finePointIndex <= checkpointData.done_points
                                 continue;
                             end
 
-                            % n = n_fast(1)
-                            setParamScalar(model, PARAM_N, n_fast(1));
-                            [a1, Rp1, Rm1, TM1] = solveAndGetRplusRminus( ...
+                            % n = fastRefractiveIndexSamples(1)
+                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1));
+                            [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
                                 model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                aStart, alpha_fine_step, aStop, ...
+                                alphaStartDeg, alphaFineStep, alphaStopDeg, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [pk1, k1] = max(abs(TM1));
-                            alpha1 = a1(k1);
-                            tm_at_pk1 = TM1(k1);
+                            [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
+                            alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
+                            tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
 
                             if PLOT_LIVE
-                                updateLivePlot('FINE', Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                    a1, TM1, alpha1, tm_at_pk1, Rp1, Rm1);
+                                updateLivePlot('FINE', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                    alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
                             end
 
-                            % n = n_fast(2) (para S_est)
-                            setParamScalar(model, PARAM_N, n_fast(2));
-                            [a2, ~, ~, TM2] = solveAndGetRplusRminus( ...
+                            % n = fastRefractiveIndexSamples(2) (for sensitivityEstimateFast calculation)
+                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
+                            [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
                                 model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                aStart, alpha_fine_step, aStop, ...
+                                alphaStartDeg, alphaFineStep, alphaStopDeg, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [~, k2] = max(abs(TM2));
-                            alpha2 = a2(k2);
+                            [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
+                            alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
 
-                            S_est = (alpha2 - alpha1) / (n_fast(2) - n_fast(1));
+                            sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
-                            FineRows = [FineRows; ...
-                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                pk1, alpha1, tm_at_pk1, alpha2, S_est]; %#ok<AGROW>
+                            fineRows = [fineRows; ...
+                                domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
 
-                            runs_done_global = runs_done_global + runs_per_point_search;
+                            runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
 
-                            stage_done = runs_done_global - stage_runs_start;
-                            [frac_stage, eta_stage]   = frac_eta(stage_done, stage_total_runs, toc(stage_t0));
-                            [frac_global, eta_global] = frac_eta(runs_done_global, grand_total_target, toc(t0));
+                            stageRunsCompleted = runsCompletedGlobal - stageRunsStart;
+                            [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
+                            [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
                             logline(['FINE   | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
-                                     ' | |TM|=%.5f @ α=%.3f° | S_est=%.4f' ...
+                                     ' | |TM|=%.5f @ alpha=%.3f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
-                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                pk1, alpha1, S_est, ...
-                                100*frac_stage, fmt_time_long(eta_stage), 100*frac_global, fmt_time_long(eta_global));
+                                domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                                100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
-                            points_since_ckpt = points_since_ckpt + 1;
-                            payload = struct('FineRows',FineRows, 'seeds', seeds);
-                            points_since_ckpt = maybe_checkpoint( ...
-                                'FINE', CKPT_EVERY_POINTS, CKPT_FILE, PROGRESS_XLSX, ...
-                                runs_done_global, points_since_ckpt, fine_point_idx, payload, ...
-                                Tcoarse, [], [], [], []);
+                            pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
+                            payload = struct('fineRows',fineRows, 'coarseSeedCandidates', coarseSeedCandidates);
+                            pointsSinceCheckpoint = maybe_checkpoint( ...
+                                'FINE', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                                runsCompletedGlobal, pointsSinceCheckpoint, finePointIndex, payload, ...
+                                coarseResultsTable, [], [], [], []);
                         end
                     end
                 end
@@ -532,146 +534,157 @@ else
         end
     end
 
-    Tfine = array2table(FineRows, 'VariableNames', ...
+    fineResultsTable = array2table(fineRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
          'alpha_peak_n2_deg','S_est_deg_per_RIU'});
 
-    seedsSuper = selectTopK_tradeoff(Tfine, TOPK_FINE, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
+    superSeedCandidates = selectTopK_tradeoff(fineResultsTable, topKFine, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
 
-    save_checkpoint(CKPT_FILE, 'SUPER', runs_done_global, 0, struct( ...
-        'Tcoarse', Tcoarse, 'Tfine', Tfine, 'seedsSuper', seedsSuper));
-    write_progress_xlsx(PROGRESS_XLSX, 'fine', Tfine);
+    save_checkpoint(checkpointFilePath, 'SUPER', runsCompletedGlobal, 0, struct( ...
+        'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates));
+    write_progress_xlsx(progressWorkbookPath, 'fine', fineResultsTable);
 end
 
 %% ==================================================================
 %                     SUPERFINE PLANNING (EXACT)
+% ------------------------------------------------------------------
+% Compute exact SUPER run counts around each fine seed before launching
+% the final refinement stage, keeping the run budget/ETA precise.
 % ==================================================================
-if isempty(seedsSuper) && RESUME && RESUME_STAGE=="SUPER"
-    if isfield(CKPT.payload,'seedsSuper')
-        seedsSuper = CKPT.payload.seedsSuper;
+if isempty(superSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="SUPER"
+    if isfield(checkpointData.payload,'superSeedCandidates')
+        superSeedCandidates = checkpointData.payload.superSeedCandidates;
     else
-        error('Checkpoint at SUPER stage has no "seedsSuper". Rerun FINE.');
+        error('Checkpoint at SUPER stage has no "superSeedCandidates". Rerun FINE.');
     end
 end
 
-super_total_pts = 0;
-for s = 1:height(seedsSuper)
-    Hlist = (seedsSuper.h_au_nm(s)    - super_hau_delta)  : super_hau_step  : (seedsSuper.h_au_nm(s)    + super_hau_delta);
-    Glist = (seedsSuper.h_ceyig_nm(s) - super_hcey_delta) : super_hcey_step : (seedsSuper.h_ceyig_nm(s) + super_hcey_delta);
-    Llist = (seedsSuper.L_domain_nm(s)- super_Ldom_delta) : super_Ldom_step : (seedsSuper.L_domain_nm(s)+ super_Ldom_delta);
-    Dlist = (seedsSuper.l_dente_nm(s) - super_Lden_delta) : super_Lden_step : (seedsSuper.l_dente_nm(s) + super_Lden_delta);
-    Slist = (seedsSuper.h_si_nm(s)    - super_hsi_delta)  : super_hsi_step  : (seedsSuper.h_si_nm(s)    + super_hsi_delta);
-    super_total_pts = super_total_pts + numel(Llist)*numel(Dlist)*numel(Slist)*numel(Glist)*numel(Hlist);
+superTotalPoints = 0;
+for s = 1:height(superSeedCandidates)
+    goldHeightList = (superSeedCandidates.h_au_nm(s)    - superGoldHeightDelta)  : superGoldHeightStep  : (superSeedCandidates.h_au_nm(s)    + superGoldHeightDelta);
+    ceyigHeightList = (superSeedCandidates.h_ceyig_nm(s) - superCeyigHeightDelta) : superCeyigHeightStep : (superSeedCandidates.h_ceyig_nm(s) + superCeyigHeightDelta);
+    domainPeriodList = (superSeedCandidates.L_domain_nm(s)- superDomainPeriodDelta) : superDomainPeriodStep : (superSeedCandidates.L_domain_nm(s)+ superDomainPeriodDelta);
+    toothWidthList = (superSeedCandidates.l_dente_nm(s) - superToothWidthDelta) : superToothWidthStep : (superSeedCandidates.l_dente_nm(s) + superToothWidthDelta);
+    siliconHeightList = (superSeedCandidates.h_si_nm(s)    - superSiliconHeightDelta)  : superSiliconHeightStep  : (superSeedCandidates.h_si_nm(s)    + superSiliconHeightDelta);
+    superTotalPoints = superTotalPoints + numel(domainPeriodList)*numel(toothWidthList)*numel(siliconHeightList)*numel(ceyigHeightList)*numel(goldHeightList);
 end
-super_total_runs = runs_per_point_search * super_total_pts;
+superTotalRuns = runsPerSearchPoint * superTotalPoints;
 
-fprintf('\nSTAGE SUPER — EXACT: %d runs (TOP-%d)\n', super_total_runs, height(seedsSuper));
-fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', grand_total_target);
+fprintf('\nSTAGE SUPER - EXACT: %d runs (TOP-%d)\n', superTotalRuns, height(superSeedCandidates));
+fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
 
 %% ==================================================================
 %                             SUPERFINE
+% ------------------------------------------------------------------
+% Final refinement around the fine seeds with tighter alpha steps.
+% Recompute TMOKE peak and sensitivity, log ETAs, checkpoint, and pick:
+%   - bestTradeoffCandidate (combined score),
+%   - bestTmokeCandidate (max |TMOKE|),
+%   - bestSensitivityCandidate (max |S_est|).
 % ==================================================================
-Tsuper = [];
-best_tradeoff = table(); best_TMOKE = table(); best_S = table();
+superResultsTable = [];
+bestTradeoffCandidate = table(); bestTmokeCandidate = table(); bestSensitivityCandidate = table();
 
-if RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
-    if isfield(CKPT.payload,'Tsuper'), Tsuper = CKPT.payload.Tsuper; end
-    if isfield(CKPT.payload,'best_tradeoff'), best_tradeoff = CKPT.payload.best_tradeoff; end
-    if isfield(CKPT.payload,'best_TMOKE'),    best_TMOKE    = CKPT.payload.best_TMOKE;    end
-    if isfield(CKPT.payload,'best_S'),        best_S        = CKPT.payload.best_S;        end
-    fprintf('SKIP SUPER -> restored Tsuper (rows=%d) and best selections.\n', size(Tsuper,1));
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["VALID","FULL"]))
+    if isfield(checkpointData.payload,'superResultsTable'), superResultsTable = checkpointData.payload.superResultsTable; end
+    if isfield(checkpointData.payload,'bestTradeoffCandidate'), bestTradeoffCandidate = checkpointData.payload.bestTradeoffCandidate; end
+    if isfield(checkpointData.payload,'bestTmokeCandidate'),    bestTmokeCandidate    = checkpointData.payload.bestTmokeCandidate;    end
+    if isfield(checkpointData.payload,'bestSensitivityCandidate'),        bestSensitivityCandidate        = checkpointData.payload.bestSensitivityCandidate;        end
+    fprintf('SKIP SUPER -> restored superResultsTable (rows=%d) and best selections.\n', size(superResultsTable,1));
 else
-    SuperRows = [];
-    stage_runs_start = runs_done_global;
-    stage_total_runs = super_total_runs;
-    stage_t0 = tic;
+    superRows = [];
+    stageRunsStart = runsCompletedGlobal;
+    stageTotalRuns = superTotalRuns;
+    stageTimerStart = tic;
 
-    super_point_idx = 0;
-    if RESUME && RESUME_STAGE=="SUPER" && CKPT.done_points > 0
-        runs_done_global = CKPT.runs_done_global;
-        super_point_idx  = CKPT.done_points;
-        if isfield(CKPT.payload,'SuperRows'),  SuperRows  = CKPT.payload.SuperRows;  end
-        if isfield(CKPT.payload,'seedsSuper'), seedsSuper = CKPT.payload.seedsSuper; end
-        fprintf('>>> SUPER resume: skipping %d points already computed.\n', super_point_idx);
+    superPointIndex = 0;
+    if resumeFromCheckpoint && resumeStageTag=="SUPER" && checkpointData.done_points > 0
+        runsCompletedGlobal = checkpointData.runsCompletedGlobal;
+        superPointIndex  = checkpointData.done_points;
+        if isfield(checkpointData.payload,'superRows'),  superRows  = checkpointData.payload.superRows;  end
+        if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
+        fprintf('>>> SUPER resume: skipping %d points already computed.\n', superPointIndex);
     end
 
-    for s = 1:height(seedsSuper)
-        aCenter = seedsSuper.alpha_peak_base_deg(s);
+    for s = 1:height(superSeedCandidates)
+        % Alpha window center comes from the previous stage peak at baselineRefractiveIndex
+        alphaWindowCenterDeg = superSeedCandidates.alpha_peak_base_deg(s);
 
-        Hlist = (seedsSuper.h_au_nm(s)    - super_hau_delta)  : super_hau_step  : (seedsSuper.h_au_nm(s)    + super_hau_delta);
-        Glist = (seedsSuper.h_ceyig_nm(s) - super_hcey_delta) : super_hcey_step : (seedsSuper.h_ceyig_nm(s) + super_hcey_delta);
-        Llist = (seedsSuper.L_domain_nm(s)- super_Ldom_delta) : super_Ldom_step : (seedsSuper.L_domain_nm(s)+ super_Ldom_delta);
-        Dlist = (seedsSuper.l_dente_nm(s) - super_Lden_delta) : super_Lden_step : (seedsSuper.l_dente_nm(s) + super_Lden_delta);
-        Slist = (seedsSuper.h_si_nm(s)    - super_hsi_delta)  : super_hsi_step  : (seedsSuper.h_si_nm(s)    + super_hsi_delta);
+        goldHeightList = (superSeedCandidates.h_au_nm(s)    - superGoldHeightDelta)  : superGoldHeightStep  : (superSeedCandidates.h_au_nm(s)    + superGoldHeightDelta);
+        ceyigHeightList = (superSeedCandidates.h_ceyig_nm(s) - superCeyigHeightDelta) : superCeyigHeightStep : (superSeedCandidates.h_ceyig_nm(s) + superCeyigHeightDelta);
+        domainPeriodList = (superSeedCandidates.L_domain_nm(s)- superDomainPeriodDelta) : superDomainPeriodStep : (superSeedCandidates.L_domain_nm(s)+ superDomainPeriodDelta);
+        toothWidthList = (superSeedCandidates.l_dente_nm(s) - superToothWidthDelta) : superToothWidthStep : (superSeedCandidates.l_dente_nm(s) + superToothWidthDelta);
+        siliconHeightList = (superSeedCandidates.h_si_nm(s)    - superSiliconHeightDelta)  : superSiliconHeightStep  : (superSeedCandidates.h_si_nm(s)    + superSiliconHeightDelta);
 
-        aStart = max(0,  aCenter - SUPER_ALPHA_HALFSPAN_SENS);
-        aStop  = min(89, aCenter + SUPER_ALPHA_HALFSPAN_SENS);
+        % Alpha sweep window (slightly wider for sensitivity to avoid missing the peak)
+        alphaStartDeg = max(0,  alphaWindowCenterDeg - superAlphaHalfSpanSensitivity);
+        alphaStopDeg  = min(89, alphaWindowCenterDeg + superAlphaHalfSpanSensitivity);
 
-        for iL = 1:numel(Llist)
-            setParamNm(model, PARAM_LDOM, Llist(iL));
-            for iD = 1:numel(Dlist)
-                setParamNm(model, PARAM_LDEN, Dlist(iD));
-                for iS = 1:numel(Slist)
-                    setParamNm(model, PARAM_HSI, Slist(iS));
-                    for ig = 1:numel(Glist)
-                        setParamNm(model, PARAM_HCEY, Glist(ig));
-                        for ih = 1:numel(Hlist)
-                            setParamNm(model, PARAM_HAU, Hlist(ih));
+        for domainPeriodIdx = 1:numel(domainPeriodList)
+            setParamNm(model, PARAM_LDOM, domainPeriodList(domainPeriodIdx));
+            for toothWidthIdx = 1:numel(toothWidthList)
+                setParamNm(model, PARAM_LDEN, toothWidthList(toothWidthIdx));
+                for siliconHeightIdx = 1:numel(siliconHeightList)
+                    setParamNm(model, PARAM_HSI, siliconHeightList(siliconHeightIdx));
+                    for ceyigHeightIdx = 1:numel(ceyigHeightList)
+                        setParamNm(model, PARAM_HCEY, ceyigHeightList(ceyigHeightIdx));
+                        for goldHeightIdx = 1:numel(goldHeightList)
+                            setParamNm(model, PARAM_HAU, goldHeightList(goldHeightIdx));
 
-                            super_point_idx = super_point_idx + 1;
-                            if RESUME && RESUME_STAGE=="SUPER" && super_point_idx <= CKPT.done_points
+                            superPointIndex = superPointIndex + 1;
+                            if resumeFromCheckpoint && resumeStageTag=="SUPER" && superPointIndex <= checkpointData.done_points
                                 continue;
                             end
 
-                            setParamScalar(model, PARAM_N, n_fast(1));
-                            [a1, Rp1, Rm1, TM1] = solveAndGetRplusRminus( ...
+                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1));
+                            [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
                                 model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                aStart, alpha_super_step, aStop, ...
+                                alphaStartDeg, alphaSuperStep, alphaStopDeg, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [pk1, k1] = max(abs(TM1));
-                            alpha1 = a1(k1);
-                            tm_at_pk1 = TM1(k1);
+                            [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
+                            alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
+                            tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
 
                             if PLOT_LIVE
-                                updateLivePlot('SUPER', Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                    a1, TM1, alpha1, tm_at_pk1, Rp1, Rm1);
+                                updateLivePlot('SUPER', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                    alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
                             end
 
-                            setParamScalar(model, PARAM_N, n_fast(2));
-                            [a2, ~, ~, TM2] = solveAndGetRplusRminus( ...
+                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
+                            [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
                                 model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                aStart, alpha_super_step, aStop, ...
+                                alphaStartDeg, alphaSuperStep, alphaStopDeg, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [~, k2] = max(abs(TM2));
-                            alpha2 = a2(k2);
+                            [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
+                            alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
 
-                            S_est = (alpha2 - alpha1) / (n_fast(2) - n_fast(1));
+                            sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
-                            SuperRows = [SuperRows; ...
-                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                pk1, alpha1, tm_at_pk1, alpha2, S_est]; %#ok<AGROW>
+                            superRows = [superRows; ...
+                                domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
 
-                            runs_done_global = runs_done_global + runs_per_point_search;
+                            runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
 
-                            stage_done = runs_done_global - stage_runs_start;
-                            [frac_stage, eta_stage]   = frac_eta(stage_done, stage_total_runs, toc(stage_t0));
-                            [frac_global, eta_global] = frac_eta(runs_done_global, grand_total_target, toc(t0));
+                            stageRunsCompleted = runsCompletedGlobal - stageRunsStart;
+                            [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
+                            [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
                             logline(['SUPER  | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_cey=%5.1f h_au=%5.1f' ...
-                                     ' | |TM|=%.5f @ α=%.4f° | S_est=%.4f' ...
+                                     ' | |TM|=%.5f @ alpha=%.4f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
-                                Llist(iL), Dlist(iD), Slist(iS), Glist(ig), Hlist(ih), ...
-                                pk1, alpha1, S_est, ...
-                                100*frac_stage, fmt_time_long(eta_stage), 100*frac_global, fmt_time_long(eta_global));
+                                domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
+                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                                100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
-                            points_since_ckpt = points_since_ckpt + 1;
-                            payload = struct('SuperRows',SuperRows, 'seedsSuper', seedsSuper);
-                            points_since_ckpt = maybe_checkpoint( ...
-                                'SUPER', CKPT_EVERY_POINTS, CKPT_FILE, PROGRESS_XLSX, ...
-                                runs_done_global, points_since_ckpt, super_point_idx, payload, ...
-                                Tcoarse, Tfine, [], [], []);
+                            pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
+                            payload = struct('superRows',superRows, 'superSeedCandidates', superSeedCandidates);
+                            pointsSinceCheckpoint = maybe_checkpoint( ...
+                                'SUPER', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                                runsCompletedGlobal, pointsSinceCheckpoint, superPointIndex, payload, ...
+                                coarseResultsTable, fineResultsTable, [], [], []);
                         end
                     end
                 end
@@ -679,40 +692,46 @@ else
         end
     end
 
-    Tsuper = array2table(SuperRows, 'VariableNames', ...
+    superResultsTable = array2table(superRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
          'alpha_peak_n2_deg','S_est_deg_per_RIU'});
 
     % Escolhas finais dentro do SUPER:
-    best_tradeoff = selectTopK_tradeoff(Tsuper, 1, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
-    best_TMOKE    = selectTopK_single(Tsuper, 1, 'maxAbsTMOKE_base');      % max |TMOKE|
-    best_S        = selectTopK_single_abs(Tsuper, 1, 'S_est_deg_per_RIU'); % max |S|
+    bestTradeoffCandidate = selectTopK_tradeoff(superResultsTable, 1, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
+    bestTmokeCandidate    = selectTopK_single(superResultsTable, 1, 'maxAbsTMOKE_base');      % max |TMOKE|
+    bestSensitivityCandidate        = selectTopK_single_abs(superResultsTable, 1, 'S_est_deg_per_RIU'); % max |S|
 
     fprintf('\n===== BEST (SUPERFINE) =====\n');
-    fprintf('Trade-off (rankTM+rankS):\n'); disp(best_tradeoff);
-    fprintf('Best TMOKE only:\n');         disp(best_TMOKE);
-    fprintf('Best |S| only:\n');          disp(best_S);
+    fprintf('Trade-off (rankTM+rankS):\n'); disp(bestTradeoffCandidate);
+    fprintf('Best TMOKE only:\n');         disp(bestTmokeCandidate);
+    fprintf('Best |S| only:\n');          disp(bestSensitivityCandidate);
 
-    save_checkpoint(CKPT_FILE, 'VALID', runs_done_global, 0, struct( ...
-        'Tcoarse', Tcoarse, 'Tfine', Tfine, 'Tsuper', Tsuper, ...
-        'best_tradeoff', best_tradeoff, 'best_TMOKE', best_TMOKE, 'best_S', best_S));
-    write_progress_xlsx(PROGRESS_XLSX, 'super', Tsuper);
+    save_checkpoint(checkpointFilePath, 'VALID', runsCompletedGlobal, 0, struct( ...
+        'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superResultsTable', superResultsTable, ...
+        'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate));
+    write_progress_xlsx(progressWorkbookPath, 'super', superResultsTable);
 end
 
 %% ==================================================================
-%                 VALID: Curvas densas + S_dense (3 n)
+%                 VALID: dense curves + sensitivityDense (3 n values)
+% ------------------------------------------------------------------
+% Fix geometry to bestTradeoffCandidate and:
+%   - sweep dense alpha for each validationRefractiveIndexList value,
+%   - find alpha_peak for each n,
+%   - fit alpha_peak vs n to compute sensitivityDense,
+%   - store dense tables for later export/plots.
 % ==================================================================
-% A partir daqui, a geometria fixa é a best_tradeoff (melhor compromisso).
-if isempty(best_tradeoff) && RESUME && any(strcmp(RESUME_STAGE, ["VALID","FULL"]))
-    best_tradeoff = CKPT.payload.best_tradeoff;
+% From here, geometry is fixed to bestTradeoffCandidate (best compromise).
+if isempty(bestTradeoffCandidate) && resumeFromCheckpoint && any(strcmp(resumeStageTag, ["VALID","FULL"]))
+    bestTradeoffCandidate = checkpointData.payload.bestTradeoffCandidate;
 end
 
-Ldom_best = best_tradeoff.L_domain_nm(1);
-Lden_best = best_tradeoff.l_dente_nm(1);
-hsi_best  = best_tradeoff.h_si_nm(1);
-hcey_best = best_tradeoff.h_ceyig_nm(1);
-hau_best  = best_tradeoff.h_au_nm(1);
+Ldom_best = bestTradeoffCandidate.L_domain_nm(1);
+Lden_best = bestTradeoffCandidate.l_dente_nm(1);
+hsi_best  = bestTradeoffCandidate.h_si_nm(1);
+hcey_best = bestTradeoffCandidate.h_ceyig_nm(1);
+hau_best  = bestTradeoffCandidate.h_au_nm(1);
 
 setParamNm(model, PARAM_LDOM, Ldom_best);
 setParamNm(model, PARAM_LDEN, Lden_best);
@@ -720,194 +739,203 @@ setParamNm(model, PARAM_HSI,  hsi_best);
 setParamNm(model, PARAM_HCEY, hcey_best);
 setParamNm(model, PARAM_HAU,  hau_best);
 
-alpha_peaks = zeros(size(n_valid));
-TMmax_abs   = zeros(size(n_valid));
-TM_all      = cell(size(n_valid));
-alpha_all   = cell(size(n_valid));
-Rp_all      = cell(size(n_valid));
-Rm_all      = cell(size(n_valid));
+alphaPeakDegreesByN = zeros(size(validationRefractiveIndexList));
+tmokeMaxAbsByN   = zeros(size(validationRefractiveIndexList));
+tmokeCurvesByN      = cell(size(validationRefractiveIndexList));
+alphaGridsByN   = cell(size(validationRefractiveIndexList));
+reflectancePlusByN      = cell(size(validationRefractiveIndexList));
+reflectanceMinusByN      = cell(size(validationRefractiveIndexList));
 
-for i = 1:numel(n_valid)
-    setParamScalar(model, PARAM_N, n_valid(i));
+for i = 1:numel(validationRefractiveIndexList)
+    setParamScalar(model, PARAM_N, validationRefractiveIndexList(i));
 
     [a, Rp, Rm, TM] = solveAndGetRplusRminus( ...
         model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-        0, alpha_dense_step, 89, ...
+        0, alphaDenseStep, 89, ...
         M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
     [tmmax, k] = max(abs(TM));
-    alpha_peaks(i) = a(k);
-    TMmax_abs(i)   = tmmax;
+    alphaPeakDegreesByN(i) = a(k);
+    tmokeMaxAbsByN(i)   = tmmax;
 
-    alpha_all{i} = a;
-    TM_all{i}    = TM;
-    Rp_all{i}    = Rp;
-    Rm_all{i}    = Rm;
+    alphaGridsByN{i} = a;
+    tmokeCurvesByN{i}    = TM;
+    reflectancePlusByN{i}    = Rp;
+    reflectanceMinusByN{i}    = Rm;
 
-    runs_done_global = runs_done_global + 2;
+    runsCompletedGlobal = runsCompletedGlobal + 2;
 end
 
-p = polyfit(n_valid, alpha_peaks, 1);
-S_dense = p(1);
+alphaVsNLinearFit = polyfit(validationRefractiveIndexList, alphaPeakDegreesByN, 1);
+sensitivityDense = alphaVsNLinearFit(1);
 
-fprintf('\n===== VALID (best_tradeoff) =====\n');
+fprintf('\n===== VALID (bestTradeoffCandidate) =====\n');
 fprintf('Best geom: Ldom=%g | Lden=%g | hsi=%g | hcey=%g | hau=%g\n', ...
     Ldom_best, Lden_best, hsi_best, hcey_best, hau_best);
-fprintf('alpha_peak(n) = ['); fprintf(' %.4f', alpha_peaks); fprintf(' ]\n');
-fprintf('S_dense ≈ %.6f deg/RIU (fit linear)\n', S_dense);
+fprintf('alpha_peak(n) = ['); fprintf(' %.4f', alphaPeakDegreesByN); fprintf(' ]\n');
+fprintf('sensitivityDense ~= %.6f deg/RIU (linear fit)\n', sensitivityDense);
 
-% Define “alpha_best / tmoke_best” como o pico no n_base (se estiver em n_valid)
-[~, idxBase] = min(abs(n_valid - n_base));
-alpha_best = alpha_peaks(idxBase);
+% Define alphaBestDeg / tmokeBestValue as the peak at baselineRefractiveIndex (if inside validationRefractiveIndexList)
+[~, idxBase] = min(abs(validationRefractiveIndexList - baselineRefractiveIndex));
+alphaBestDeg = alphaPeakDegreesByN(idxBase);
 
-% Recalcula tmoke_best no n_base (a partir dos dados já coletados)
-[tmmax_base, kbase] = max(abs(TM_all{idxBase}));
-tmoke_best = TM_all{idxBase}(kbase);
+% Recompute tmokeBestValue at baselineRefractiveIndex using cached data
+[tmokeBaselineMax, tmokeBaselineIndex] = max(abs(tmokeCurvesByN{idxBase}));
+tmokeBestValue = tmokeCurvesByN{idxBase}(tmokeBaselineIndex);
 
-% Tabela densa consolidada (todas as linhas de alpha para cada n)
-BestDense = table();
-for i = 1:numel(n_valid)
-    ncol = repmat(n_valid(i), numel(alpha_all{i}), 1);
+% Consolidate dense results for every alpha point at each n (for export/plots)
+bestDenseTable = table();
+for i = 1:numel(validationRefractiveIndexList)
+    ncol = repmat(validationRefractiveIndexList(i), numel(alphaGridsByN{i}), 1);
     Ttmp = table( ...
-        repmat(Ldom_best,numel(alpha_all{i}),1), repmat(Lden_best,numel(alpha_all{i}),1), repmat(hsi_best,numel(alpha_all{i}),1), ...
-        repmat(hcey_best,numel(alpha_all{i}),1), repmat(hau_best,numel(alpha_all{i}),1), ...
-        ncol, alpha_all{i}(:), Rp_all{i}(:), Rm_all{i}(:), TM_all{i}(:), ...
+        repmat(Ldom_best,numel(alphaGridsByN{i}),1), repmat(Lden_best,numel(alphaGridsByN{i}),1), repmat(hsi_best,numel(alphaGridsByN{i}),1), ...
+        repmat(hcey_best,numel(alphaGridsByN{i}),1), repmat(hau_best,numel(alphaGridsByN{i}),1), ...
+        ncol, alphaGridsByN{i}(:), reflectancePlusByN{i}(:), reflectanceMinusByN{i}(:), tmokeCurvesByN{i}(:), ...
         'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
                           'n','alpha_deg','Rplus','Rminus','TMOKE'});
-    BestDense = [BestDense; Ttmp]; %#ok<AGROW>
+    bestDenseTable = [bestDenseTable; Ttmp]; %#ok<AGROW>
 end
 
-save_checkpoint(CKPT_FILE, 'FULL', runs_done_global, 0, struct( ...
-    'Tcoarse', Tcoarse, 'Tfine', Tfine, 'Tsuper', Tsuper, ...
-    'best_tradeoff', best_tradeoff, 'best_TMOKE', best_TMOKE, 'best_S', best_S, ...
-    'BestDense', BestDense, 'S_dense', S_dense, ...
-    'alpha_best', alpha_best, 'tmoke_best', tmoke_best));
-write_progress_xlsx(PROGRESS_XLSX, 'dense', BestDense);
+save_checkpoint(checkpointFilePath, 'FULL', runsCompletedGlobal, 0, struct( ...
+    'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superResultsTable', superResultsTable, ...
+    'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate, ...
+    'bestDenseTable', bestDenseTable, 'sensitivityDense', sensitivityDense, ...
+    'alphaBestDeg', alphaBestDeg, 'tmokeBestValue', tmokeBestValue));
+write_progress_xlsx(progressWorkbookPath, 'dense', bestDenseTable);
 
 %% ==================================================================
 %                           Snapshot (optional)
 % ==================================================================
-% Snapshot do melhor ponto (best_tradeoff) no alpha_best e n_base
+% Capture the bestTradeoffCandidate at alphaBestDeg and baselineRefractiveIndex for inspection
 if SAVE_SNAPSHOT
-    setParamScalar(model, PARAM_N, n_base);
+    setParamScalar(model, PARAM_N, baselineRefractiveIndex);
 
-    setAlphaMSweep(model, STUDY_TAG, ALPHA_NAME, alpha_best, 0.01, alpha_best, MSIGN_NAME, sprintf('%s %s', M_PLUS, M_MINUS));
+    setAlphaMSweep(model, STUDY_TAG, ALPHA_NAME, alphaBestDeg, 0.01, alphaBestDeg, MSIGN_NAME, sprintf('%s %s', M_PLUS, M_MINUS));
     model.study(STUDY_TAG).run;
     refreshDerivedValues(model);
 
-    runs_done_global = runs_done_global + 2;
+    runsCompletedGlobal = runsCompletedGlobal + 2;
 
-    timestamp = datestr(now,'yyyymmdd_HHMMSS');
-    snap_name = fullfile(homeDir, sprintf( ...
+    snapshotTimestamp = datestr(now,'yyyymmdd_HHMMSS');
+    snapshotFilePath = fullfile(projectRootDir, sprintf( ...
         'snapshot_bestTradeoff_Ldom%4.0f_Lden%4.0f_hsi%3.0f_hcey%.3f_hau%.3f_n%.3f_alpha%.4f_%s.mph', ...
-        Ldom_best, Lden_best, hsi_best, hcey_best, hau_best, n_base, alpha_best, timestamp));
-    mphsave(model, snap_name);
-    logline('Snapshot saved: %s\n', snap_name);
+        Ldom_best, Lden_best, hsi_best, hcey_best, hau_best, baselineRefractiveIndex, alphaBestDeg, snapshotTimestamp));
+    mphsave(model, snapshotFilePath);
+    logline('Snapshot saved: %s\n', snapshotFilePath);
 end
 
 %% ==================================================================
-%                     FULL: curva final (baseline n_base)
+%                     FULL: final baselineRefractiveIndex curve
 % ==================================================================
-% FULL mantém a saída padrão “bonita” em um único n (n_base).
-setParamScalar(model, PARAM_N, n_base);
+% FULL keeps the standard single-n (baselineRefractiveIndex) curve for a
+% clean export and baseline comparison with the VALID dense curves.
+setParamScalar(model, PARAM_N, baselineRefractiveIndex);
 
-[a_full, Rp_full, Rm_full, TM_full] = solveAndGetRplusRminus( ...
+[alphaFull, reflectancePlusFull, reflectanceMinusFull, tmokeFull] = solveAndGetRplusRminus( ...
     model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-    0, alpha_full_step, 89, ...
+    0, alphaFullStep, 89, ...
     M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-runs_done_global = runs_done_global + 2;
+runsCompletedGlobal = runsCompletedGlobal + 2;
 
 if PLOT_LIVE
     updateLivePlot('FULL', Ldom_best, Lden_best, hsi_best, hcey_best, hau_best, ...
-        a_full, TM_full, alpha_best, tmoke_best, Rp_full, Rm_full);
+        alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, reflectancePlusFull, reflectanceMinusFull);
 end
 
-BestFull = table( ...
-    repmat(Ldom_best,numel(a_full),1), repmat(Lden_best,numel(a_full),1), repmat(hsi_best,numel(a_full),1), ...
-    repmat(hcey_best,numel(a_full),1), repmat(hau_best,numel(a_full),1), ...
-    repmat(n_base,numel(a_full),1), ...
-    a_full(:), Rp_full(:), Rm_full(:), TM_full(:), ...
+bestFullTable = table( ...
+    repmat(Ldom_best,numel(alphaFull),1), repmat(Lden_best,numel(alphaFull),1), repmat(hsi_best,numel(alphaFull),1), ...
+    repmat(hcey_best,numel(alphaFull),1), repmat(hau_best,numel(alphaFull),1), ...
+    repmat(baselineRefractiveIndex,numel(alphaFull),1), ...
+    alphaFull(:), reflectancePlusFull(:), reflectanceMinusFull(:), tmokeFull(:), ...
     'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
                       'n','alpha_deg','Rplus','Rminus','TMOKE'});
 
 %% ==================================================================
 %                               CSV / XLSX
 % ==================================================================
-if ~isempty(Tcoarse), writetable(Tcoarse, fullfile(homeDir,'tmoke_sens_5D_coarse.csv')); end
-if ~isempty(Tfine),   writetable(Tfine,   fullfile(homeDir,'tmoke_sens_5D_fine.csv')); end
-if ~isempty(Tsuper),  writetable(Tsuper,  fullfile(homeDir,'tmoke_sens_5D_super.csv')); end
+% Persist coarse/fine/super candidate tables and the bestTradeoffCandidate
+% dense/baseline curves for downstream analysis in Python/Excel.
+if ~isempty(coarseResultsTable), writetable(coarseResultsTable, fullfile(projectRootDir,'tmoke_sens_5D_coarse.csv')); end
+if ~isempty(fineResultsTable),   writetable(fineResultsTable,   fullfile(projectRootDir,'tmoke_sens_5D_fine.csv')); end
+if ~isempty(superResultsTable),  writetable(superResultsTable,  fullfile(projectRootDir,'tmoke_sens_5D_super.csv')); end
 
-writetable(BestDense, fullfile(homeDir,'tmoke_sens_bestTradeoff_dense_ALLn.csv'));
-writetable(BestFull,  fullfile(homeDir,'tmoke_sens_bestTradeoff_full_baseline.csv'));
+writetable(bestDenseTable, fullfile(projectRootDir,'tmoke_sens_bestTradeoff_dense_ALLn.csv'));
+writetable(bestFullTable,  fullfile(projectRootDir,'tmoke_sens_bestTradeoff_full_baseline.csv'));
 
-write_progress_xlsx(PROGRESS_XLSX, 'full', BestFull);
+write_progress_xlsx(progressWorkbookPath, 'full', bestFullTable);
 
-% Limpa checkpoint no final (execução “completa”)
-if isfile(CKPT_FILE), delete(CKPT_FILE); end
+% Delete checkpoint at the end of a complete execution
+if isfile(checkpointFilePath), delete(checkpointFilePath); end
 
 %% ==================================================================
-%                               PLOTS FINAIS
+%                               FINAL PLOTS
+% ------------------------------------------------------------------
+% Plot the validated TMOKE curves, alpha_peak vs n fit, |TMOKE|max vs n,
+% and a scatter map of all candidates vs the chosen bestTradeoffCandidate.
+% Saved to figureOutputDirectory when SAVE_FIGS is true.
 % ==================================================================
 if MAKE_PLOTS
-    % (1) TMOKE(alpha) para cada n (VALID)
+    % (1) TMOKE(alpha) for each n (VALID)
     figure('Name','(1) TMOKE(alpha) for each n (VALID)','NumberTitle','off','Color','w');
     hold on; grid on;
-    for i = 1:numel(n_valid)
-        plot(alpha_all{i}, TM_all{i}, 'LineWidth', 1.2, 'DisplayName', sprintf('n=%.2f', n_valid(i)));
+    for i = 1:numel(validationRefractiveIndexList)
+        plot(alphaGridsByN{i}, tmokeCurvesByN{i}, 'LineWidth', 1.2, 'DisplayName', sprintf('n=%.2f', validationRefractiveIndexList(i)));
     end
     xlabel('\alpha [deg]'); ylabel('TMOKE(\alpha)');
-    title(sprintf('Best trade-off | TMOKE(\\alpha) vs \\alpha (S_{dense}=%.4f deg/RIU)', S_dense));
+    title(sprintf('Best trade-off | TMOKE(\\alpha) vs \\alpha (S_{dense}=%.4f deg/RIU)', sensitivityDense));
     legend('Location','best');
 
     % (2) alpha_peak vs n + fit
     figure('Name','(2) alpha_peak vs n (VALID)','NumberTitle','off','Color','w');
     hold on; grid on;
-    plot(n_valid, alpha_peaks, 'o', 'LineWidth', 1.5, 'DisplayName','dados');
-    nfit = linspace(min(n_valid), max(n_valid), 100);
-    plot(nfit, polyval(p,nfit), '-', 'LineWidth', 1.2, 'DisplayName', sprintf('fit (S=%.4f)', S_dense));
+    plot(validationRefractiveIndexList, alphaPeakDegreesByN, 'o', 'LineWidth', 1.5, 'DisplayName','data');
+    nfit = linspace(min(validationRefractiveIndexList), max(validationRefractiveIndexList), 100);
+    plot(nfit, polyval(alphaVsNLinearFit,nfit), '-', 'LineWidth', 1.2, 'DisplayName', sprintf('fit (S=%.4f)', sensitivityDense));
     xlabel('n'); ylabel('\alpha_{peak} [deg]');
-    title('\alpha_{peak} em função de n');
+    title('alpha_{peak} as a function of n');
     legend('Location','best');
 
     % (3) |TMOKE|max vs n
     figure('Name','(3) |TMOKE|max vs n (VALID)','NumberTitle','off','Color','w');
     grid on; hold on;
-    plot(n_valid, TMmax_abs, 'o-', 'LineWidth', 1.5);
+    plot(validationRefractiveIndexList, tmokeMaxAbsByN, 'o-', 'LineWidth', 1.5);
     xlabel('n'); ylabel('|TMOKE|_{max}');
     title('|TMOKE|_{max} vs n');
 
-    % (4) Scatter (trade-off) no espaço (|TMOKE|, |S_est|)
-    AllCand = Tcoarse;
-    if ~isempty(Tfine),  AllCand = [AllCand; Tfine]; end %#ok<AGROW>
-    if ~isempty(Tsuper), AllCand = [AllCand; Tsuper]; end %#ok<AGROW>
+    % (4) Scatter (trade-off) in the (|TMOKE|, |sensitivityEstimateFast|) plane
+    allCandidateResults = coarseResultsTable;
+    if ~isempty(fineResultsTable),  allCandidateResults = [allCandidateResults; fineResultsTable]; end %#ok<AGROW>
+    if ~isempty(superResultsTable), allCandidateResults = [allCandidateResults; superResultsTable]; end %#ok<AGROW>
 
-    figure('Name','(4) Trade-off map: |TMOKE| vs |S_est|','NumberTitle','off','Color','w');
+    figure('Name','(4) Trade-off map: |TMOKE| vs |sensitivityEstimateFast|','NumberTitle','off','Color','w');
     grid on; hold on;
-    scatter(abs(AllCand.maxAbsTMOKE_base), abs(AllCand.S_est_deg_per_RIU), 25, 'filled');
-    scatter(abs(best_tradeoff.maxAbsTMOKE_base), abs(best_tradeoff.S_est_deg_per_RIU), 120, 'filled');
+    scatter(abs(allCandidateResults.maxAbsTMOKE_base), abs(allCandidateResults.S_est_deg_per_RIU), 25, 'filled');
+    scatter(abs(bestTradeoffCandidate.maxAbsTMOKE_base), abs(bestTradeoffCandidate.S_est_deg_per_RIU), 120, 'filled');
     xlabel('|TMOKE|_{max} (baseline)'); ylabel('|S_{est}| [deg/RIU]');
-    title('Candidatos (COARSE+FINE+SUPER) e best_tradeoff (destaque)');
+    title('Candidates (COARSE+FINE+SUPER) with bestTradeoffCandidate highlighted');
 end
 
 %% ==================================================================
 %                           SAVE ALL FIGURES
 % ==================================================================
 if SAVE_FIGS
-    saveAllOpenFigures(FIG_DIR, "tmoke_sens_5d", FIG_FORMATS);
-    fprintf('Figures saved in: %s\n', FIG_DIR);
+    saveAllOpenFigures(figureOutputDirectory, "tmoke_sens_5d", FIG_FORMATS);
+    fprintf('Figures saved in: %s\n', figureOutputDirectory);
 end
 
 %% ==================================================================
 %                               SUMMARY
 % ==================================================================
-elapsed_total = toc(t0);
+% Print the final selections and validated sensitivity, plus run counts
+% and wall-clock time. The detailed log remains in the runlog_* file.
+elapsed_total = toc(globalTimerStart);
 fprintf('\n===== SUMMARY =====\n');
-fprintf('Best TRADE-OFF (SUPER):\n'); disp(best_tradeoff);
-fprintf('Best TMOKE only (SUPER):\n'); disp(best_TMOKE);
-fprintf('Best |S_est| only (SUPER):\n'); disp(best_S);
-fprintf('VALID @ best_tradeoff: S_dense ≈ %.6f deg/RIU\n', S_dense);
-fprintf('Runs done: %d | Elapsed: %s\n', runs_done_global, fmt_time_long(elapsed_total));
+fprintf('Best TRADE-OFF (SUPER):\n'); disp(bestTradeoffCandidate);
+fprintf('Best TMOKE only (SUPER):\n'); disp(bestTmokeCandidate);
+fprintf('Best |sensitivityEstimateFast| only (SUPER):\n'); disp(bestSensitivityCandidate);
+fprintf('VALID @ bestTradeoffCandidate: sensitivityDense ~= %.6f deg/RIU\n', sensitivityDense);
+fprintf('Runs done: %d | Elapsed: %s\n', runsCompletedGlobal, fmt_time_long(elapsed_total));
 
 diary off;
 
@@ -916,17 +944,18 @@ diary off;
 % =====================================================================
 
 function setParamNm(mdl, name, val_nm)
+    % Set a COMSOL parameter that carries nanometers as its unit
     mdl.param.set(name, sprintf('%.12g[nm]', val_nm));
 end
 
 function setParamScalar(mdl, name, val)
-% Para parâmetros sem unidade (ex.: índice n)
+    % Set a unitless COMSOL parameter (e.g., refractive index)
     mdl.param.set(name, sprintf('%.12g', val));
 end
 
 function Tsel = selectTopK_tradeoff(T, K, colTM, colS)
-% Seleciona TOP-K por score combinado: rank(|TM|) + rank(|S|)
-% - rank 1 = melhor
+% Select TOP-K rows using the combined score: rank(|TM|) + rank(|S|)
+% - rank 1 = best
     tm = abs(T.(colTM));
     ss = abs(T.(colS));
 
@@ -941,13 +970,13 @@ function Tsel = selectTopK_tradeoff(T, K, colTM, colS)
 end
 
 function Tsel = selectTopK_single(T, K, col)
-% TOP-K por maior valor do col (sem abs)
+% Select TOP-K rows by the largest value in a column (no abs)
     [~, ord] = sort(T.(col), 'descend');
     Tsel = T(ord(1:min(K,height(T))), :);
 end
 
 function Tsel = selectTopK_single_abs(T, K, col)
-% TOP-K por maior abs(col)
+% Select TOP-K rows by the largest absolute value in a column
     [~, ord] = sort(abs(T.(col)), 'descend');
     Tsel = T(ord(1:min(K,height(T))), :);
 end
@@ -977,8 +1006,8 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     refreshDerivedValues(mdl);
     [alpha2_deg, R2] = readAlphaAndRFromNamedTable(mdl, ttagMinus, Npts);
 
-    assert(numel(alpha1_deg)==Npts && numel(alpha2_deg)==Npts, 'Unexpected α sweep length.');
-    assert(max(abs(alpha1_deg - alpha2_deg)) < 1e-9, 'α grids differ between m=+1 and m=-1.');
+    assert(numel(alpha1_deg)==Npts && numel(alpha2_deg)==Npts, 'Unexpected alpha sweep length.');
+    assert(max(abs(alpha1_deg - alpha2_deg)) < 1e-9, 'alpha grids differ between m=+1 and m=-1.');
 
     alpha_deg = alpha1_deg;
     Rplus  = R1;
@@ -1132,22 +1161,22 @@ function setAlphaMSweep(mdl, studyTag, alphaName, aStartDeg, aStepDeg, aStopDeg,
     mdl.study(studyTag).feature(ptag).set('plistarr', {alist, mListStr});
 end
 
-function save_checkpoint(CKPT_FILE, stage, runs_done_global, done_points, payload)
-    CKPT.stage            = char(stage);
-    CKPT.runs_done_global = runs_done_global;
-    CKPT.done_points      = done_points;
-    CKPT.payload          = payload;
-    tmp = [CKPT_FILE '.tmp'];
-    save(tmp,'CKPT','-v7.3');
-    movefile(tmp, CKPT_FILE, 'f');
+function save_checkpoint(checkpointFilePath, stage, runsCompletedGlobal, done_points, payload)
+    checkpointData.stage            = char(stage);
+    checkpointData.runsCompletedGlobal = runsCompletedGlobal;
+    checkpointData.done_points      = done_points;
+    checkpointData.payload          = payload;
+    tmp = [checkpointFilePath '.tmp'];
+    save(tmp,'checkpointData','-v7.3');
+    movefile(tmp, checkpointFilePath, 'f');
 end
 
-function write_progress_xlsx(PROGRESS_XLSX, varargin)
+function write_progress_xlsx(progressWorkbookPath, varargin)
     for i=1:2:numel(varargin)
         sheet = varargin{i}; T = varargin{i+1};
         if ~isempty(T)
             try
-                writetable(T, PROGRESS_XLSX, 'Sheet', sheet);
+                writetable(T, progressWorkbookPath, 'Sheet', sheet);
             catch
                 warning('write_progress_xlsx: failed sheet %s', sheet);
             end
@@ -1156,16 +1185,16 @@ function write_progress_xlsx(PROGRESS_XLSX, varargin)
 end
 
 function points_since_ckpt_new = maybe_checkpoint( ...
-        stage, every_points, CKPT_FILE, PROGRESS_XLSX, ...
-        runs_done_global, points_since_ckpt, done_points, payload, ...
-        Tcoarse, Tfine, Tsuper, BestDense, BestFull)
-    points_since_ckpt_new = points_since_ckpt;
-    if points_since_ckpt >= every_points
-        save_checkpoint(CKPT_FILE, stage, runs_done_global, done_points, payload);
+        stage, every_points, checkpointFilePath, progressWorkbookPath, ...
+        runsCompletedGlobal, pointsSinceCheckpoint, done_points, payload, ...
+        coarseResultsTable, fineResultsTable, superResultsTable, bestDenseTable, bestFullTable)
+    points_since_ckpt_new = pointsSinceCheckpoint;
+    if pointsSinceCheckpoint >= every_points
+        save_checkpoint(checkpointFilePath, stage, runsCompletedGlobal, done_points, payload);
         try
-            write_progress_xlsx(PROGRESS_XLSX, ...
-                'coarse', Tcoarse, 'fine', Tfine, 'super', Tsuper, ...
-                'dense', BestDense, 'full', BestFull);
+            write_progress_xlsx(progressWorkbookPath, ...
+                'coarse', coarseResultsTable, 'fine', fineResultsTable, 'super', superResultsTable, ...
+                'dense', bestDenseTable, 'full', bestFullTable);
         catch
         end
         points_since_ckpt_new = 0;
@@ -1214,7 +1243,7 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hcey, hau, ...
         set(hRm, 'XData', nan, 'YData', nan);
     end
 
-    title(ax, sprintf('%s | Ldom=%g | Lden=%g | hsi=%g | hcey=%.3f | hau=%.3f | |TM|=%.5f @ %.3f°', ...
+    title(ax, sprintf('%s | Ldom=%g | Lden=%g | hsi=%g | hcey=%.3f | hau=%.3f | |TM|=%.5f @ %.3f deg', ...
         stage, Ldom, Lden, hsi, hcey, hau, abs(tmoke_peak), alpha_peak));
 
     drawnow('limitrate');
@@ -1256,7 +1285,7 @@ function saveAllOpenFigures(outDir, prefix, formats)
                         saveas(fig, filePath);
                 end
             catch ME
-                warning('Falha ao salvar %s: %s', filePath, ME.message);
+                warning('Failed to save %s: %s', filePath, ME.message);
             end
         end
     end
