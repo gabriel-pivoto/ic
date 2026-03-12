@@ -11,12 +11,17 @@
 %
 % For every geometry point (COARSE/FINE/SUPER) we compute both metrics:
 %   - TMOKE metric:    maxAbsTMOKE_base = max(|TMOKE(alpha)|) at baselineRefractiveIndex
-%   - Sensitivity est: sensitivityEstimateFast = (alpha_peak(n2) - alpha_peak(n1)) / (n2 - n1)
-%                      using only two refractive indices (fast estimate).
+%   - Sensitivity est: track the same TMOKE resonance across n = [1.30, 1.33, 1.36]
+%                      using n = 1.33 as the reference curve:
+%                        1) find the global TMOKE peak at n = 1.33
+%                        2) for the other n values, search only inside
+%                           alpha_ref +/- 20 deg (clipped to the global
+%                           alpha sweep limits)
+%                        3) fit alpha_peak vs n and use the slope as S.
 %
-% In the VALID stage, on the best candidate, we recompute sensitivity with
-% a denser set of refractive indices:
-%   - validationRefractiveIndexList = [1.33 1.36 1.39] (configurable)
+% In the VALID stage, on the best candidate, we recompute the same tracked
+% sensitivity with a dense alpha step:
+%   - validationRefractiveIndexList = [1.30 1.33 1.36]
 %   - sensitivityDense = slope of alpha_peak vs n (deg/RIU) from linear fit.
 %
 % Trade-off selection:
@@ -61,6 +66,7 @@ checkpointDirectory   = fullfile(projectRootDir,'checkpoints');         % Folder
 if ~exist(checkpointDirectory,'dir'), mkdir(checkpointDirectory); end   % Create checkpoint folder if it does not exist
 checkpointFilePath    = fullfile(checkpointDirectory,'tmoke_sens_5d_checkpoint.mat'); % Binary checkpoint file
 progressWorkbookPath  = fullfile(checkpointDirectory,'tmoke_sens_progress.xlsx');     % Human-friendly Excel progress log
+checkpointSchemaTag   = 'tracked_same_peak_v1';                         % Ignore old checkpoints computed with a different sensitivity metric
 
 checkpointEveryPoints = 10;                                             % Save progress every N evaluated geometry points
 pointsSinceCheckpoint = 0;                                              % Counter since the last checkpoint write
@@ -74,10 +80,15 @@ if isfile(checkpointFilePath)
     try
         checkpointFileContents = load(checkpointFilePath,'checkpointData'); % Load only the checkpointData variable
         checkpointData = checkpointFileContents.checkpointData;             % Extract saved struct from disk
-        resumeFromCheckpoint = true;                                        % Flip resume flag because checkpoint exists
-        resumeStageTag = string(checkpointData.stage);                      % Stage name recorded when the checkpoint was saved
-        fprintf('>>> resumeFromCheckpoint detected | stage=%s | done_points=%d | runsCompletedGlobal=%d\\n', ...
-            resumeStageTag, checkpointData.done_points, checkpointData.runsCompletedGlobal);
+        if isfield(checkpointData,'schema') && strcmp(checkpointData.schema, checkpointSchemaTag)
+            resumeFromCheckpoint = true;                                    % Flip resume flag because checkpoint is compatible with the current metric
+            resumeStageTag = string(checkpointData.stage);                  % Stage name recorded when the checkpoint was saved
+            fprintf('>>> resumeFromCheckpoint detected | stage=%s | done_points=%d | runsCompletedGlobal=%d\\n', ...
+                resumeStageTag, checkpointData.done_points, checkpointData.runsCompletedGlobal);
+        else
+            warning('Checkpoint exists but uses an older sensitivity metric. Starting fresh.');
+            checkpointData = struct;
+        end
     catch
         warning('Checkpoint exists but could not be loaded. Starting fresh.');
     end
@@ -104,15 +115,18 @@ RPLUS_TABLE_TAG  = 'tblRplus';
 RMINUS_TABLE_TAG = 'tblRminus';
 
 %% --------------------- Refractive indices (n) ----------------------
-% During the search stages (COARSE/FINE/SUPER):
-% - use 2 refractive indices to estimate S quickly (sensitivityEstimateFast)
-% - baselineRefractiveIndex is also used for the TMOKE metric (maxAbsTMOKE_base)
-fastRefractiveIndexSamples = [1.33, 1.39];           % Two n values used for the quick sensitivity estimate
-baselineRefractiveIndex    = fastRefractiveIndexSamples(1); % Baseline n for TMOKE sweeps (change if needed)
+% All sensitivity calculations now track the same TMOKE resonance using the
+% same 3-point list. The reference curve is always n = 1.33:
+%   1) solve the reference curve and find its global TMOKE peak
+%   2) solve the other n values in a window centered on that peak
+%   3) fit alpha_peak(n) to obtain the sensitivity slope
+fastRefractiveIndexSamples = [1.30, 1.33, 1.36];
+trackingReferenceRefractiveIndex = 1.33;
+trackingHalfWindowDeg = 20;
+baselineRefractiveIndex = trackingReferenceRefractiveIndex; % The TMOKE score still uses the reference n = 1.33
 
-% During the final validation stage (VALID):
-% - use 3 (or more) refractive indices to compute sensitivityDense reliably
-validationRefractiveIndexList = [1.33, 1.36, 1.39];
+% VALID uses the same tracked-n list, but with a much denser alpha step.
+validationRefractiveIndexList = [1.30, 1.33, 1.36];
 
 
 %% ------------------------ COARSE grids (exact) ----------------------
@@ -129,6 +143,8 @@ alphaFineStep  = 0.1;             % Fine alpha step [deg]
 alphaSuperStep = 0.01;            % Superfine alpha step [deg]
 alphaDenseStep = 0.01;            % Validation alpha step [deg]
 alphaFullStep  = 0.01;            % Final baseline alpha step [deg]
+globalAlphaSweepMinDeg = alphaCoarseRange(1); % Absolute lower bound used when clipping the tracked +/-20 deg window
+globalAlphaSweepMaxDeg = alphaCoarseRange(3); % Absolute upper bound used when clipping the tracked +/-20 deg window
 
 %% ----------------------- TOP-K strategy ----------------------------
 topKCoarse = 1;   % Number of coarse candidates promoted to the fine stage
@@ -151,8 +167,9 @@ superSiliconHeightDelta= 2;   superSiliconHeightStep= 1;
 fineAlphaHalfSpan   = 5;     % Nominal TMOKE window half-span for FINE stage [deg]
 superAlphaHalfSpan  = 2;     % Nominal TMOKE window half-span for SUPER stage [deg]
 
-% The alpha_peak can shift slightly with refractive index, so use slightly
-% wider windows when estimating sensitivity to avoid missing the peak.
+% These windows are used only to relock the reference curve at n = 1.33 in
+% FINE/SUPER. Once the reference peak is found, the other n values are
+% searched in the tracked +/-20 deg window around that peak.
 fineAlphaHalfSpanSensitivity  = fineAlphaHalfSpan  + 1;   % +/-6 deg margin for sensitivity sweeps
 superAlphaHalfSpanSensitivity = superAlphaHalfSpan + 2;   % +/-4 deg margin for sensitivity sweeps
 
@@ -192,8 +209,9 @@ numSiliconHeightPoints= numel(siliconHeightGridNm);     % Number of silicon-heig
 numCeyigHeightPoints  = numel(ceyigHeightGridNm);       % Number of Ce:YIG-height samples
 numGoldHeightPoints   = numel(goldHeightGridNm);        % Number of gold-height samples
 
-% Each refractive index requires 2 runs (m = +/-1). Searching uses two n values.
-runsPerSearchPoint = 2 * numel(fastRefractiveIndexSamples);     % 4 runs per geometry point
+% Each refractive index requires 2 runs (m = +/-1). Searching now uses the
+% full tracked 3-point list [1.30, 1.33, 1.36].
+runsPerSearchPoint = 2 * numel(fastRefractiveIndexSamples);
 
 coarseTotalPoints  = numDomainPeriodPoints*numToothWidthPoints*numSiliconHeightPoints*numCeyigHeightPoints*numGoldHeightPoints;
 coarseTotalRuns = runsPerSearchPoint * coarseTotalPoints;
@@ -239,8 +257,9 @@ fprintf('  TOTAL  (estimate): %d runs\n\n', globalRunTargetEstimate);
 % ==================================================================
 % Sweep the full coarse geometry grid. For each geometry point:
 %   1) Set geometry parameters.
-%   2) Sweep alpha at fastRefractiveIndexSamples(1) to find TMOKE peak and peak angle.
-%   3) Sweep alpha at fastRefractiveIndexSamples(2) to estimate sensitivity from the peak shift.
+%   2) Solve the reference curve at n = 1.33 and lock the target TMOKE peak.
+%   3) Solve n = 1.30 and n = 1.36 around alpha_ref +/- 20 deg to measure
+%      only the displacement of that same peak.
 %   4) Log metrics, update ETAs, and checkpoint periodically.
 % Outputs:
 %   - coarseResultsTable: metrics for every coarse point.
@@ -264,7 +283,7 @@ else
     % Colunas:
     % [Ldom, Lden, hsi, hcey, hau,
     %  maxAbsTMOKE_base, alpha_peak_base, TMOKE_at_peak_base,
-    %  alpha_peak_n2, sensitivityEstimateFast]
+    %  alpha_peak_high, sensitivityEstimateFast]
     coarseRows = [];
     coarsePointIndex = 0;
 
@@ -291,52 +310,53 @@ else
                             continue;
                         end
 
-                        % =======================
-                        % (1) n = fastRefractiveIndexSamples(1) (base)
-                        % =======================
-                        setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1)); % n sem unidade
-                        [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
-                            model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
+                        % Solve the tracked 3-point sensitivity metric:
+                        % 1) lock onto the reference resonance at n = 1.33
+                        % 2) follow that same resonance at the other n values
+                        %    only inside alpha_ref +/- 20 deg
+                        % 3) fit alpha_peak(n) to get the sensitivity slope
+                        fastTrackedEval = evaluateTrackedSensitivityAndCurves( ...
+                            model, STUDY_TAG, PARAM_N, fastRefractiveIndexSamples, ...
+                            trackingReferenceRefractiveIndex, trackingHalfWindowDeg, ...
+                            ALPHA_NAME, MSIGN_NAME, ...
                             alphaCoarseRange(1), alphaCoarseRange(2), alphaCoarseRange(3), ...
+                            globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
                             M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                        [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
-                        alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
-                        tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
+                        referenceFastIndex = fastTrackedEval.referenceIndex;
+                        highestFastIndex = fastTrackedEval.highestNIndex;
 
-                        if tmokePeakIndexFastN1==1 || tmokePeakIndexFastN1==numel(tmokeCurveFastN1)
-                            logline('WARN COARSE (n=%.2f) peak at alpha-edge (alpha*=%.3f in [%.3f, %.3f])\n', ...
-                                fastRefractiveIndexSamples(1), alphaAtPeakFastN1, alphaGridFastN1(1), alphaGridFastN1(end));
+                        alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
+                        reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
+                        reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                        tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
+
+                        tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
+                        alphaAtPeakFastBase = fastTrackedEval.alphaPeakDegreesByN(referenceFastIndex);
+                        tmokeAtPeakFastBase = fastTrackedEval.tmokeAtTrackedPeakByN(referenceFastIndex);
+                        alphaAtPeakFastHigh = fastTrackedEval.alphaPeakDegreesByN(highestFastIndex);
+                        sensitivityEstimateFast = fastTrackedEval.sensitivitySlope;
+
+                        tmokePeakIndexFastBase = find(abs(alphaGridFastBase - alphaAtPeakFastBase) < 1e-9, 1, 'first');
+                        if ~isempty(tmokePeakIndexFastBase) && ...
+                                (tmokePeakIndexFastBase == 1 || tmokePeakIndexFastBase == numel(tmokeCurveFastBase))
+                            logline('WARN COARSE (n=%.2f) reference peak at alpha-edge (alpha*=%.3f in [%.3f, %.3f])\n', ...
+                                baselineRefractiveIndex, alphaAtPeakFastBase, alphaGridFastBase(1), alphaGridFastBase(end));
                         end
 
                         if PLOT_LIVE
                             updateLivePlot('COARSE', ...
                                 domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                                 ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
-                                alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
+                                alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
                         end
-
-                        % ======================
-                        % (2) n = fastRefractiveIndexSamples(2) (alphaVsNLinearFit/ sensitivityEstimateFast)
-                        % ======================
-                        setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
-                        [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
-                            model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                            alphaCoarseRange(1), alphaCoarseRange(2), alphaCoarseRange(3), ...
-                            M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
-
-                        [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
-                        alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
-
-% Quick sensitivity estimate using 2 points
-                        sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
                         % Store candidate point data
                         coarseRows = [coarseRows; ...
                             domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                             ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
-                            tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, ...
-                            alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
+                            tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, ...
+                            alphaAtPeakFastHigh, sensitivityEstimateFast]; %#ok<AGROW>
 
 % Point cost: 2*fastRefractiveIndexSamples runs (m=+/-1 for each n)
                         runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
@@ -351,7 +371,7 @@ else
                                  ' [Stage %5.1f%% | ETA %s | Global %s%% | ETA %s]\n'], ...
                             domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                             ceyigHeightGridNm(ceyigHeightIdx), goldHeightGridNm(goldHeightIdx), ...
-                            tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                            tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, sensitivityEstimateFast, ...
                             100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), fmt_pct(globalCompletionFraction), fmt_eta_flag(globalEtaSeconds, isTotalRunEstimateExact));
 
                         % Checkpoint
@@ -370,7 +390,7 @@ else
     coarseResultsTable = array2table(coarseRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
-         'alpha_peak_n2_deg','S_est_deg_per_RIU'});
+         'alpha_peak_high_deg','S_est_deg_per_RIU'});
 
 % TOP-K selection using combined score (rank TMOKE + rank |S|)
     coarseSeedCandidates = selectTopK_tradeoff(coarseResultsTable, topKCoarse, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
@@ -457,7 +477,8 @@ else
         toothWidthList = max(min(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) - fineToothWidthDelta) : fineToothWidthStep : min(max(toothWidthGridNm),  coarseSeedCandidates.l_dente_nm(s) + fineToothWidthDelta);
         siliconHeightList = max(min(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    - fineSiliconHeightDelta)  : fineSiliconHeightStep  : min(max(siliconHeightGridNm),     coarseSeedCandidates.h_si_nm(s)    + fineSiliconHeightDelta);
 
-        % Alpha sweep window (slightly wider for sensitivity to avoid missing the peak)
+        % Reference-curve alpha window used to relock the n = 1.33 resonance.
+        % The other n values are then solved in the tracked +/-20 deg window.
         alphaStartDeg = max(0,  alphaWindowCenterDeg - fineAlphaHalfSpanSensitivity);
         alphaStopDeg  = min(89, alphaWindowCenterDeg + fineAlphaHalfSpanSensitivity);
 
@@ -477,37 +498,37 @@ else
                                 continue;
                             end
 
-                            % n = fastRefractiveIndexSamples(1)
-                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1));
-                            [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
-                                model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
+                            % Repeat the tracked-resonance logic on the finer alpha grid.
+                            fastTrackedEval = evaluateTrackedSensitivityAndCurves( ...
+                                model, STUDY_TAG, PARAM_N, fastRefractiveIndexSamples, ...
+                                trackingReferenceRefractiveIndex, trackingHalfWindowDeg, ...
+                                ALPHA_NAME, MSIGN_NAME, ...
                                 alphaStartDeg, alphaFineStep, alphaStopDeg, ...
+                                globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
-                            alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
-                            tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
+                            referenceFastIndex = fastTrackedEval.referenceIndex;
+                            highestFastIndex = fastTrackedEval.highestNIndex;
+
+                            alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
+                            reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
+                            reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                            tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
+
+                            tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
+                            alphaAtPeakFastBase = fastTrackedEval.alphaPeakDegreesByN(referenceFastIndex);
+                            tmokeAtPeakFastBase = fastTrackedEval.tmokeAtTrackedPeakByN(referenceFastIndex);
+                            alphaAtPeakFastHigh = fastTrackedEval.alphaPeakDegreesByN(highestFastIndex);
+                            sensitivityEstimateFast = fastTrackedEval.sensitivitySlope;
 
                             if PLOT_LIVE
                                 updateLivePlot('FINE', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
                             end
-
-                            % n = fastRefractiveIndexSamples(2) (for sensitivityEstimateFast calculation)
-                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
-                            [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
-                                model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                alphaStartDeg, alphaFineStep, alphaStopDeg, ...
-                                M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
-
-                            [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
-                            alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
-
-                            sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
                             fineRows = [fineRows; ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
+                                tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, alphaAtPeakFastHigh, sensitivityEstimateFast]; %#ok<AGROW>
 
                             runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
 
@@ -518,7 +539,7 @@ else
                                      ' | |TM|=%.5f @ alpha=%.3f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                                tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, sensitivityEstimateFast, ...
                                 100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
                             pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
@@ -537,7 +558,7 @@ else
     fineResultsTable = array2table(fineRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
-         'alpha_peak_n2_deg','S_est_deg_per_RIU'});
+         'alpha_peak_high_deg','S_est_deg_per_RIU'});
 
     superSeedCandidates = selectTopK_tradeoff(fineResultsTable, topKFine, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
 
@@ -617,7 +638,8 @@ else
         toothWidthList = (superSeedCandidates.l_dente_nm(s) - superToothWidthDelta) : superToothWidthStep : (superSeedCandidates.l_dente_nm(s) + superToothWidthDelta);
         siliconHeightList = (superSeedCandidates.h_si_nm(s)    - superSiliconHeightDelta)  : superSiliconHeightStep  : (superSeedCandidates.h_si_nm(s)    + superSiliconHeightDelta);
 
-        % Alpha sweep window (slightly wider for sensitivity to avoid missing the peak)
+        % Reference-curve alpha window used to relock the n = 1.33 resonance.
+        % The other n values are then solved in the tracked +/-20 deg window.
         alphaStartDeg = max(0,  alphaWindowCenterDeg - superAlphaHalfSpanSensitivity);
         alphaStopDeg  = min(89, alphaWindowCenterDeg + superAlphaHalfSpanSensitivity);
 
@@ -637,35 +659,37 @@ else
                                 continue;
                             end
 
-                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(1));
-                            [alphaGridFastN1, reflectancePlusFastN1, reflectanceMinusFastN1, tmokeCurveFastN1] = solveAndGetRplusRminus( ...
-                                model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
+                            % Final stage still uses the same tracked 3-point metric.
+                            fastTrackedEval = evaluateTrackedSensitivityAndCurves( ...
+                                model, STUDY_TAG, PARAM_N, fastRefractiveIndexSamples, ...
+                                trackingReferenceRefractiveIndex, trackingHalfWindowDeg, ...
+                                ALPHA_NAME, MSIGN_NAME, ...
                                 alphaStartDeg, alphaSuperStep, alphaStopDeg, ...
+                                globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-                            [tmokePeakMagnitudeFastN1, tmokePeakIndexFastN1] = max(abs(tmokeCurveFastN1));
-                            alphaAtPeakFastN1 = alphaGridFastN1(tmokePeakIndexFastN1);
-                            tmokeAtPeakFastN1 = tmokeCurveFastN1(tmokePeakIndexFastN1);
+                            referenceFastIndex = fastTrackedEval.referenceIndex;
+                            highestFastIndex = fastTrackedEval.highestNIndex;
+
+                            alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
+                            reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
+                            reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                            tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
+
+                            tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
+                            alphaAtPeakFastBase = fastTrackedEval.alphaPeakDegreesByN(referenceFastIndex);
+                            tmokeAtPeakFastBase = fastTrackedEval.tmokeAtTrackedPeakByN(referenceFastIndex);
+                            alphaAtPeakFastHigh = fastTrackedEval.alphaPeakDegreesByN(highestFastIndex);
+                            sensitivityEstimateFast = fastTrackedEval.sensitivitySlope;
 
                             if PLOT_LIVE
                                 updateLivePlot('SUPER', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastN1, tmokeCurveFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, reflectancePlusFastN1, reflectanceMinusFastN1);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
                             end
-
-                            setParamScalar(model, PARAM_N, fastRefractiveIndexSamples(2));
-                            [alphaGridFastN2, ~, ~, tmokeCurveFastN2] = solveAndGetRplusRminus( ...
-                                model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-                                alphaStartDeg, alphaSuperStep, alphaStopDeg, ...
-                                M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
-
-                            [~, tmokePeakIndexFastN2] = max(abs(tmokeCurveFastN2));
-                            alphaAtPeakFastN2 = alphaGridFastN2(tmokePeakIndexFastN2);
-
-                            sensitivityEstimateFast = (alphaAtPeakFastN2 - alphaAtPeakFastN1) / (fastRefractiveIndexSamples(2) - fastRefractiveIndexSamples(1));
 
                             superRows = [superRows; ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, tmokeAtPeakFastN1, alphaAtPeakFastN2, sensitivityEstimateFast]; %#ok<AGROW>
+                                tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, alphaAtPeakFastHigh, sensitivityEstimateFast]; %#ok<AGROW>
 
                             runsCompletedGlobal = runsCompletedGlobal + runsPerSearchPoint;
 
@@ -676,7 +700,7 @@ else
                                      ' | |TM|=%.5f @ alpha=%.4f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), ceyigHeightList(ceyigHeightIdx), goldHeightList(goldHeightIdx), ...
-                                tmokePeakMagnitudeFastN1, alphaAtPeakFastN1, sensitivityEstimateFast, ...
+                                tmokePeakMagnitudeFastBase, alphaAtPeakFastBase, sensitivityEstimateFast, ...
                                 100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
                             pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
@@ -695,7 +719,7 @@ else
     superResultsTable = array2table(superRows, 'VariableNames', ...
         {'L_domain_nm','l_dente_nm','h_si_nm','h_ceyig_nm','h_au_nm', ...
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
-         'alpha_peak_n2_deg','S_est_deg_per_RIU'});
+         'alpha_peak_high_deg','S_est_deg_per_RIU'});
 
     % Escolhas finais dentro do SUPER:
     bestTradeoffCandidate = selectTopK_tradeoff(superResultsTable, 1, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
@@ -714,11 +738,11 @@ else
 end
 
 %% ==================================================================
-%                 VALID: dense curves + sensitivityDense (3 n values)
+%                 VALID: dense curves + tracked sensitivityDense (3 n values)
 % ------------------------------------------------------------------
 % Fix geometry to bestTradeoffCandidate and:
 %   - sweep dense alpha for each validationRefractiveIndexList value,
-%   - find alpha_peak for each n,
+%   - track the same TMOKE resonance across n using n = 1.33 as reference,
 %   - fit alpha_peak vs n to compute sensitivityDense,
 %   - store dense tables for later export/plots.
 % ==================================================================
@@ -739,35 +763,27 @@ setParamNm(model, PARAM_HSI,  hsi_best);
 setParamNm(model, PARAM_HCEY, hcey_best);
 setParamNm(model, PARAM_HAU,  hau_best);
 
-alphaPeakDegreesByN = zeros(size(validationRefractiveIndexList));
-tmokeMaxAbsByN   = zeros(size(validationRefractiveIndexList));
-tmokeCurvesByN      = cell(size(validationRefractiveIndexList));
-alphaGridsByN   = cell(size(validationRefractiveIndexList));
-reflectancePlusByN      = cell(size(validationRefractiveIndexList));
-reflectanceMinusByN      = cell(size(validationRefractiveIndexList));
+% VALID reuses the same "follow the same resonance" logic, but here every n
+% is swept over the full dense alpha range so the final plots/export keep
+% the complete TMOKE(alpha) curves.
+validationTrackedEval = evaluateTrackedSensitivityAndCurves( ...
+    model, STUDY_TAG, PARAM_N, validationRefractiveIndexList, ...
+    trackingReferenceRefractiveIndex, trackingHalfWindowDeg, ...
+    ALPHA_NAME, MSIGN_NAME, ...
+    0, alphaDenseStep, 89, ...
+    globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, true, ...
+    M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-for i = 1:numel(validationRefractiveIndexList)
-    setParamScalar(model, PARAM_N, validationRefractiveIndexList(i));
+alphaPeakDegreesByN = validationTrackedEval.alphaPeakDegreesByN;
+trackedTmokeAbsByN = validationTrackedEval.trackedTmokeAbsByN;
+tmokeCurvesByN = validationTrackedEval.tmokeCurvesByN;
+alphaGridsByN = validationTrackedEval.alphaGridsByN;
+reflectancePlusByN = validationTrackedEval.reflectancePlusByN;
+reflectanceMinusByN = validationTrackedEval.reflectanceMinusByN;
+alphaVsNLinearFit = validationTrackedEval.linearFit;
+sensitivityDense = validationTrackedEval.sensitivitySlope;
 
-    [a, Rp, Rm, TM] = solveAndGetRplusRminus( ...
-        model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
-        0, alphaDenseStep, 89, ...
-        M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
-
-    [tmmax, k] = max(abs(TM));
-    alphaPeakDegreesByN(i) = a(k);
-    tmokeMaxAbsByN(i)   = tmmax;
-
-    alphaGridsByN{i} = a;
-    tmokeCurvesByN{i}    = TM;
-    reflectancePlusByN{i}    = Rp;
-    reflectanceMinusByN{i}    = Rm;
-
-    runsCompletedGlobal = runsCompletedGlobal + 2;
-end
-
-alphaVsNLinearFit = polyfit(validationRefractiveIndexList, alphaPeakDegreesByN, 1);
-sensitivityDense = alphaVsNLinearFit(1);
+runsCompletedGlobal = runsCompletedGlobal + 2*numel(validationRefractiveIndexList);
 
 fprintf('\n===== VALID (bestTradeoffCandidate) =====\n');
 fprintf('Best geom: Ldom=%g | Lden=%g | hsi=%g | hcey=%g | hau=%g\n', ...
@@ -779,9 +795,8 @@ fprintf('sensitivityDense ~= %.6f deg/RIU (linear fit)\n', sensitivityDense);
 [~, idxBase] = min(abs(validationRefractiveIndexList - baselineRefractiveIndex));
 alphaBestDeg = alphaPeakDegreesByN(idxBase);
 
-% Recompute tmokeBestValue at baselineRefractiveIndex using cached data
-[tmokeBaselineMax, tmokeBaselineIndex] = max(abs(tmokeCurvesByN{idxBase}));
-tmokeBestValue = tmokeCurvesByN{idxBase}(tmokeBaselineIndex);
+% The baseline TMOKE value also comes from the tracked reference resonance.
+tmokeBestValue = validationTrackedEval.tmokeAtTrackedPeakByN(idxBase);
 
 % Consolidate dense results for every alpha point at each n (for export/plots)
 bestDenseTable = table();
@@ -871,7 +886,8 @@ if isfile(checkpointFilePath), delete(checkpointFilePath); end
 %% ==================================================================
 %                               FINAL PLOTS
 % ------------------------------------------------------------------
-% Plot the validated TMOKE curves, alpha_peak vs n fit, |TMOKE|max vs n,
+% Plot the validated TMOKE curves, alpha_peak vs n fit, |TMOKE| at the
+% tracked peak vs n,
 % and a scatter map of all candidates vs the chosen bestTradeoffCandidate.
 % Saved to figureOutputDirectory when SAVE_FIGS is true.
 % ==================================================================
@@ -896,12 +912,12 @@ if MAKE_PLOTS
     title('alpha_{peak} as a function of n');
     legend('Location','best');
 
-    % (3) |TMOKE|max vs n
-    figure('Name','(3) |TMOKE|max vs n (VALID)','NumberTitle','off','Color','w');
+    % (3) |TMOKE| at the tracked peak vs n
+    figure('Name','(3) |TMOKE| at tracked peak vs n (VALID)','NumberTitle','off','Color','w');
     grid on; hold on;
-    plot(validationRefractiveIndexList, tmokeMaxAbsByN, 'o-', 'LineWidth', 1.5);
-    xlabel('n'); ylabel('|TMOKE|_{max}');
-    title('|TMOKE|_{max} vs n');
+    plot(validationRefractiveIndexList, trackedTmokeAbsByN, 'o-', 'LineWidth', 1.5);
+    xlabel('n'); ylabel('|TMOKE| at tracked peak');
+    title('|TMOKE| at the tracked peak vs n');
 
     % (4) Scatter (trade-off) in the (|TMOKE|, |sensitivityEstimateFast|) plane
     allCandidateResults = coarseResultsTable;
@@ -979,6 +995,148 @@ function Tsel = selectTopK_single_abs(T, K, col)
 % Select TOP-K rows by the largest absolute value in a column
     [~, ord] = sort(abs(T.(col)), 'descend');
     Tsel = T(ord(1:min(K,height(T))), :);
+end
+
+function trackedEval = evaluateTrackedSensitivityAndCurves( ...
+        mdl, studyTag, PARAM_N, refractiveIndexList, ...
+        trackingReferenceRefractiveIndex, trackingHalfWindowDeg, ...
+        alphaName, mName, referenceSweepStartDeg, referenceSweepStepDeg, referenceSweepStopDeg, ...
+        globalAlphaMinDeg, globalAlphaMaxDeg, sweepAllNonReferenceCurves, ...
+        mPlusStr, mMinusStr, ttagPlus, ttagMinus)
+% Evaluate sensitivity by explicitly following the same TMOKE resonance.
+%
+% Rationale:
+%   The old code could jump from one TMOKE peak to another when n changed.
+%   Here we lock the resonance using the reference curve at n = 1.33 and
+%   then only search the other n values inside alpha_ref +/- 20 deg
+%   (clipped to the global alpha limits). This keeps the metric focused on
+%   displacement of the same resonance instead of "whatever peak is largest".
+%
+% Search-stage behavior:
+%   - the reference n is solved on the caller-provided alpha window
+%   - the other n values are solved only on the tracked window around the
+%     reference peak, unless sweepAllNonReferenceCurves=true
+%
+% VALID-stage behavior:
+%   - all n values are swept on the full dense alpha range
+%   - the tracked window is still used when choosing alpha_peak for the
+%     non-reference curves, so plots keep the full curves while the metric
+%     still follows the same resonance
+
+    refractiveIndexList = refractiveIndexList(:).';
+    tol = 1e-9;
+
+    referenceIndex = find(abs(refractiveIndexList - trackingReferenceRefractiveIndex) < tol, 1, 'first');
+    if isempty(referenceIndex)
+        error('Reference refractive index %.4f is not present in the configured list.', ...
+            trackingReferenceRefractiveIndex);
+    end
+
+    [~, highestNIndex] = max(refractiveIndexList);
+
+    trackedEval = struct();
+    trackedEval.referenceIndex = referenceIndex;
+    trackedEval.highestNIndex = highestNIndex;
+    trackedEval.alphaPeakDegreesByN = zeros(size(refractiveIndexList));
+    trackedEval.tmokeAtTrackedPeakByN = zeros(size(refractiveIndexList));
+    trackedEval.trackedTmokeAbsByN = zeros(size(refractiveIndexList));
+    trackedEval.alphaGridsByN = cell(size(refractiveIndexList));
+    trackedEval.reflectancePlusByN = cell(size(refractiveIndexList));
+    trackedEval.reflectanceMinusByN = cell(size(refractiveIndexList));
+    trackedEval.tmokeCurvesByN = cell(size(refractiveIndexList));
+
+    evaluationOrder = buildTrackingEvaluationOrder(refractiveIndexList, trackingReferenceRefractiveIndex);
+    referencePeakAlphaDeg = NaN;
+    referencePeakSign = 0;
+
+    for orderPos = 1:numel(evaluationOrder)
+        idx = evaluationOrder(orderPos);
+        nVal = refractiveIndexList(idx);
+
+        if idx == referenceIndex || sweepAllNonReferenceCurves
+            sweepStartDeg = referenceSweepStartDeg;
+            sweepStopDeg = referenceSweepStopDeg;
+        else
+            sweepStartDeg = max(globalAlphaMinDeg, referencePeakAlphaDeg - trackingHalfWindowDeg);
+            sweepStopDeg  = min(globalAlphaMaxDeg, referencePeakAlphaDeg + trackingHalfWindowDeg);
+        end
+
+        setParamScalar(mdl, PARAM_N, nVal);
+        [alphaDeg, reflectancePlus, reflectanceMinus, tmokeCurve] = solveAndGetRplusRminus( ...
+            mdl, studyTag, alphaName, mName, ...
+            sweepStartDeg, referenceSweepStepDeg, sweepStopDeg, ...
+            mPlusStr, mMinusStr, ttagPlus, ttagMinus);
+
+        trackedEval.alphaGridsByN{idx} = alphaDeg;
+        trackedEval.reflectancePlusByN{idx} = reflectancePlus;
+        trackedEval.reflectanceMinusByN{idx} = reflectanceMinus;
+        trackedEval.tmokeCurvesByN{idx} = tmokeCurve;
+
+        if idx == referenceIndex
+            % The reference curve defines which resonance will be followed.
+            [~, trackedPeakIndex] = max(abs(tmokeCurve));
+            referencePeakAlphaDeg = alphaDeg(trackedPeakIndex);
+            referencePeakSign = sign(tmokeCurve(trackedPeakIndex));
+        else
+            trackedPeakIndex = selectTrackedPeakIndex( ...
+                alphaDeg, tmokeCurve, referencePeakAlphaDeg, referencePeakSign, ...
+                trackingHalfWindowDeg, globalAlphaMinDeg, globalAlphaMaxDeg);
+        end
+
+        trackedEval.alphaPeakDegreesByN(idx) = alphaDeg(trackedPeakIndex);
+        trackedEval.tmokeAtTrackedPeakByN(idx) = tmokeCurve(trackedPeakIndex);
+        trackedEval.trackedTmokeAbsByN(idx) = abs(tmokeCurve(trackedPeakIndex));
+    end
+
+    trackedEval.referencePeakAlphaDeg = referencePeakAlphaDeg;
+    trackedEval.referencePeakSign = referencePeakSign;
+    trackedEval.linearFit = polyfit(refractiveIndexList, trackedEval.alphaPeakDegreesByN, 1);
+    trackedEval.sensitivitySlope = trackedEval.linearFit(1);
+end
+
+function evaluationOrder = buildTrackingEvaluationOrder(refractiveIndexList, trackingReferenceRefractiveIndex)
+% Force the order requested by the tracking logic:
+%   1) reference n first
+%   2) lower n values from nearest to farthest
+%   3) higher n values from nearest to farthest
+    tol = 1e-9;
+    idxReference = find(abs(refractiveIndexList - trackingReferenceRefractiveIndex) < tol, 1, 'first');
+    idxLower = find(refractiveIndexList < trackingReferenceRefractiveIndex - tol);
+    idxUpper = find(refractiveIndexList > trackingReferenceRefractiveIndex + tol);
+
+    [~, lowerOrder] = sort(refractiveIndexList(idxLower), 'descend');
+    [~, upperOrder] = sort(refractiveIndexList(idxUpper), 'ascend');
+
+    evaluationOrder = [idxReference, idxLower(lowerOrder), idxUpper(upperOrder)];
+end
+
+function trackedPeakIndex = selectTrackedPeakIndex( ...
+        alphaDeg, tmokeCurve, referencePeakAlphaDeg, referencePeakSign, ...
+        trackingHalfWindowDeg, globalAlphaMinDeg, globalAlphaMaxDeg)
+% Choose the peak corresponding to the already-locked reference resonance.
+% Preference order:
+%   1) stay inside alpha_ref +/- trackingHalfWindowDeg
+%   2) if possible, keep the same sign as the reference peak
+%   3) within those candidates, choose the largest |TMOKE|
+    trackedWindowStartDeg = max(globalAlphaMinDeg, referencePeakAlphaDeg - trackingHalfWindowDeg);
+    trackedWindowStopDeg = min(globalAlphaMaxDeg, referencePeakAlphaDeg + trackingHalfWindowDeg);
+
+    inTrackedWindow = alphaDeg >= trackedWindowStartDeg - 1e-9 & alphaDeg <= trackedWindowStopDeg + 1e-9;
+    if ~any(inTrackedWindow)
+        error('The tracked TMOKE window [%.3f, %.3f] contains no alpha points.', ...
+            trackedWindowStartDeg, trackedWindowStopDeg);
+    end
+
+    candidateIndices = find(inTrackedWindow);
+    if referencePeakSign ~= 0
+        sameSignMask = sign(tmokeCurve(candidateIndices)) == referencePeakSign;
+        if any(sameSignMask)
+            candidateIndices = candidateIndices(sameSignMask);
+        end
+    end
+
+    [~, localIndex] = max(abs(tmokeCurve(candidateIndices)));
+    trackedPeakIndex = candidateIndices(localIndex);
 end
 
 function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
@@ -1162,6 +1320,7 @@ function setAlphaMSweep(mdl, studyTag, alphaName, aStartDeg, aStepDeg, aStopDeg,
 end
 
 function save_checkpoint(checkpointFilePath, stage, runsCompletedGlobal, done_points, payload)
+    checkpointData.schema           = 'tracked_same_peak_v1';
     checkpointData.stage            = char(stage);
     checkpointData.runsCompletedGlobal = runsCompletedGlobal;
     checkpointData.done_points      = done_points;
