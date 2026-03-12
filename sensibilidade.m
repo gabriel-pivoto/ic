@@ -126,7 +126,11 @@ RMINUS_TABLE_TAG = 'tblRminus';
 %% ------------------------ Sensibilidade vs n --------------------------
 % "na" define os índices externos usados pra medir sensibilidade.
 % Quanto mais pontos, mais robusto o ajuste linear, porém mais caro.
-na = [1.33 1.36 1.39];
+na = [1.30 1.33 1.36];
+% Primeiro roda n = 1.33; depois rastreia o mesmo pico em 1.30 e 1.36
+% dentro de uma janela angular de +/-20 deg, respeitando alpha_start/alpha_stop.
+tracking_reference_n     = 1.33;
+tracking_half_window_deg = 20;
 
 % Sweep de alpha (incidência)
 alpha_start        = 0;
@@ -286,8 +290,8 @@ else
                         %   alpha_peaks: alpha_peak para cada n
                         %   alpha_grid: grid de alpha usado
                         %   TM_mat: TMOKE para cada n ao longo de alpha
-                        [Sval, alpha_peaks, alpha_grid, TM_mat] = evaluate_sensitivity_with_tmoke( ...
-                            model, STUDY_TAG, PARAM_N, na, ...
+                        [Sval, alpha_peaks, alpha_grid, TM_mat] = evaluate_tracked_sensitivity_with_tmoke( ...
+                            model, STUDY_TAG, PARAM_N, na, tracking_reference_n, tracking_half_window_deg, ...
                             ALPHA_NAME, MSIGN_NAME, ...
                             alpha_start, alpha_step_coarse, alpha_stop, ...
                             M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
@@ -418,8 +422,8 @@ else
                                 continue;
                             end
 
-                            [Sval, alpha_peaks, alpha_grid, TM_mat] = evaluate_sensitivity_with_tmoke( ...
-                                model, STUDY_TAG, PARAM_N, na, ...
+                            [Sval, alpha_peaks, alpha_grid, TM_mat] = evaluate_tracked_sensitivity_with_tmoke( ...
+                                model, STUDY_TAG, PARAM_N, na, tracking_reference_n, tracking_half_window_deg, ...
                                 ALPHA_NAME, MSIGN_NAME, ...
                                 alpha_start, alpha_step_fine, alpha_stop, ...
                                 M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
@@ -523,36 +527,15 @@ setParamNm(model, PARAM_HSI,  bestStruct.hsi_best);
 setParamNm(model, PARAM_HCEY, bestStruct.hcey_best);
 setParamNm(model, PARAM_HAU,  bestStruct.hau_best);
 
-alpha_peaks  = zeros(size(na));
-TM_all       = cell(size(na));
-alpha_all    = cell(size(na));
-Rplus_all    = cell(size(na));
-Rminus_all   = cell(size(na));
-TMmax_abs    = zeros(size(na));
-
-for i = 1:numel(na)
-    n_val = na(i);
-    model.param.set(PARAM_N, sprintf('%.12g', n_val));
-
-    [alpha_deg, Rplus, Rminus, TM] = solveAndGetRplusRminus( ...
-        model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
+[S_dense, alpha_peaks, alpha_grid_valid, TM_mat_valid, tracked_tmoke_abs, ...
+    alpha_all, TM_all, Rplus_all, Rminus_all] = evaluate_tracked_sensitivity_with_tmoke( ...
+        model, STUDY_TAG, PARAM_N, na, tracking_reference_n, tracking_half_window_deg, ...
+        ALPHA_NAME, MSIGN_NAME, ...
         alpha_start, alpha_step_dense, alpha_stop, ...
         M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
 
-    [tmmax, k] = max(abs(TM));
-    alpha_peaks(i) = alpha_deg(k);
-
-    TM_all{i}     = TM;
-    alpha_all{i}  = alpha_deg;
-    Rplus_all{i}  = Rplus;
-    Rminus_all{i} = Rminus;
-    TMmax_abs(i)  = tmmax;
-
-    runs_done_global = runs_done_global + 2;
-end
-
+runs_done_global = runs_done_global + numel(na)*2;
 p = polyfit(na, alpha_peaks, 1);
-S_dense = p(1);
 
 fprintf('alpha_peak (deg) = ['); fprintf(' %.4f', alpha_peaks); fprintf(' ]\n');
 fprintf('Sensibilidade (VALID) S ≈ %.6f deg/RIU\n', S_dense);
@@ -586,21 +569,15 @@ ylabel('\alpha_{peak} [deg]');
 title('\alpha_{peak} em função de n (VALID)');
 legend('Location','best');
 
-% (3) |TMOKE|max vs n
-figure('Name','(3) |TMOKE|_{max} vs n (VALID)','NumberTitle','off','Color','w');
+% (3) |TMOKE| no pico rastreado vs n
+figure('Name','(3) |TMOKE| no pico rastreado vs n (VALID)','NumberTitle','off','Color','w');
 grid on; hold on;
-plot(na, TMmax_abs, 'o-','LineWidth',1.5);
+plot(na, tracked_tmoke_abs, 'o-','LineWidth',1.5);
 xlabel('Índice de refração n');
-ylabel('|TMOKE|_{max}');
-title('Magnitude do pico |TMOKE|_{max} vs n (VALID)');
+ylabel('|TMOKE| no pico rastreado');
+title('Magnitude de |TMOKE| no pico rastreado vs n (VALID)');
 
 % (5) Heatmap TMOKE(α,n) (VALID)
-alpha_grid_valid = alpha_all{1};
-TM_mat_valid = zeros(numel(na), numel(alpha_grid_valid));
-for i = 1:numel(na)
-    TM_mat_valid(i,:) = TM_all{i}(:).';
-end
-
 figure('Name','(5) Heatmap TMOKE(alpha,n) (VALID)','NumberTitle','off','Color','w');
 imagesc(alpha_grid_valid, na, TM_mat_valid);
 axis xy; colorbar;
@@ -740,6 +717,114 @@ function [Sval, alpha_peaks, alpha_grid, TM_mat] = evaluate_sensitivity_with_tmo
     % Fit linear para obter S = d(alpha_peak)/d(n)
     p = polyfit(na, alpha_peaks, 1);
     Sval = p(1);   % slope [deg/RIU]
+end
+
+function [Sval, alpha_peaks, alpha_grid, TM_mat, tracked_tmoke_abs, ...
+          alpha_all, TM_all, Rplus_all, Rminus_all] = evaluate_tracked_sensitivity_with_tmoke( ...
+        mdl, studyTag, PARAM_N, na, trackingReferenceN, trackingHalfWindowDeg, ...
+        alphaName, mName, aStartDeg, aStepDeg, aStopDeg, ...
+        mPlusStr, mMinusStr, ttagPlus, ttagMinus)
+% Avalia a sensibilidade rastreando sempre o mesmo pico de TMOKE.
+% Ordem de execuÃ§Ã£o:
+%   1) n = trackingReferenceN  -> escolhe o pico global de referÃªncia
+%   2) n menores              -> procura o pico correspondente em +/- janela
+%   3) n maiores              -> idem
+    alpha_peaks = zeros(size(na));
+    alpha_grid = [];
+    TM_mat = [];
+    tracked_tmoke_abs = zeros(size(na));
+    alpha_all  = cell(size(na));
+    TM_all     = cell(size(na));
+    Rplus_all  = cell(size(na));
+    Rminus_all = cell(size(na));
+
+    eval_order = build_tracking_order(na, trackingReferenceN);
+    reference_peak_alpha_deg = [];
+    reference_peak_sign = 0;
+
+    for order_pos = 1:numel(eval_order)
+        i = eval_order(order_pos);
+        n_val = na(i);
+        mdl.param.set(PARAM_N, sprintf('%.12g', n_val));
+
+        [alpha_deg, Rplus, Rminus, TM] = solveAndGetRplusRminus( ...
+            mdl, studyTag, alphaName, mName, ...
+            aStartDeg, aStepDeg, aStopDeg, ...
+            mPlusStr, mMinusStr, ttagPlus, ttagMinus);
+
+        if isempty(TM)
+            error('TMOKE vazio na avaliaÃ§Ã£o de sensibilidade rastreada.');
+        end
+
+        if isempty(alpha_grid)
+            alpha_grid = alpha_deg(:).';
+            TM_mat = zeros(numel(na), numel(alpha_grid));
+        else
+            assert(numel(alpha_deg) == numel(alpha_grid) && max(abs(alpha_deg(:).' - alpha_grid)) < 1e-9, ...
+                'Grids de alpha diferem entre os valores de n.');
+        end
+
+        TM_mat(i,:) = TM(:).';
+        alpha_all{i}  = alpha_deg;
+        TM_all{i}     = TM;
+        Rplus_all{i}  = Rplus;
+        Rminus_all{i} = Rminus;
+
+        if isempty(reference_peak_alpha_deg)
+            [~, k] = max(abs(TM));
+            reference_peak_alpha_deg = alpha_deg(k);
+            reference_peak_sign = sign(TM(k));
+        else
+            k = select_peak_in_tracking_window(alpha_deg, TM, reference_peak_alpha_deg, ...
+                reference_peak_sign, trackingHalfWindowDeg, aStartDeg, aStopDeg);
+        end
+
+        alpha_peaks(i) = alpha_deg(k);
+        tracked_tmoke_abs(i) = abs(TM(k));
+    end
+
+    p = polyfit(na, alpha_peaks, 1);
+    Sval = p(1);
+end
+
+function eval_order = build_tracking_order(na, trackingReferenceN)
+    tol = 1e-9;
+    idx_ref = find(abs(na - trackingReferenceN) < tol, 1, 'first');
+    if isempty(idx_ref)
+        error('O valor de referÃªncia n = %.4f nÃ£o estÃ¡ presente em na.', trackingReferenceN);
+    end
+
+    idx_lower = find(na < trackingReferenceN - tol);
+    idx_upper = find(na > trackingReferenceN + tol);
+
+    [~, ord_lower] = sort(na(idx_lower), 'descend');
+    [~, ord_upper] = sort(na(idx_upper), 'ascend');
+
+    eval_order = [idx_ref, idx_lower(ord_lower), idx_upper(ord_upper)];
+end
+
+function peak_idx = select_peak_in_tracking_window(alpha_deg, TM, referencePeakAlphaDeg, ...
+        referencePeakSign, trackingHalfWindowDeg, aStartDeg, aStopDeg)
+    window_start_deg = max(aStartDeg, referencePeakAlphaDeg - trackingHalfWindowDeg);
+    window_stop_deg  = min(aStopDeg,  referencePeakAlphaDeg + trackingHalfWindowDeg);
+
+    in_window = alpha_deg >= window_start_deg - 1e-9 & alpha_deg <= window_stop_deg + 1e-9;
+    if ~any(in_window)
+        error('A janela de rastreio [%.3f, %.3f] nÃ£o contÃ©m pontos de alpha.', ...
+            window_start_deg, window_stop_deg);
+    end
+
+    window_indices = find(in_window);
+    candidate_indices = window_indices;
+    if referencePeakSign ~= 0
+        same_sign_mask = sign(TM(window_indices)) == referencePeakSign;
+        if any(same_sign_mask)
+            candidate_indices = window_indices(same_sign_mask);
+        end
+    end
+
+    [~, local_idx] = max(abs(TM(candidate_indices)));
+    peak_idx = candidate_indices(local_idx);
 end
 
 function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
