@@ -66,7 +66,7 @@ checkpointDirectory   = fullfile(projectRootDir,'checkpoints');         % Folder
 if ~exist(checkpointDirectory,'dir'), mkdir(checkpointDirectory); end   % Create checkpoint folder if it does not exist
 checkpointFilePath    = fullfile(checkpointDirectory,'tmoke_sens_4d_sem_ceyig_checkpoint.mat'); % Binary checkpoint file
 progressWorkbookPath  = fullfile(checkpointDirectory,'tmoke_sens_4d_sem_ceyig_progress.xlsx');  % Human-friendly Excel progress log
-checkpointSchemaTag   = 'tracked_same_peak_v1';                         % Ignore old checkpoints computed with a different sensitivity metric
+checkpointSchemaTag   = 'tracked_same_peak_transmission_v1';            % Ignore old checkpoints computed with reflection/older metrics
 
 checkpointEveryPoints = 10;                                             % Save progress every N evaluated geometry points
 pointsSinceCheckpoint = 0;                                              % Counter since the last checkpoint write
@@ -110,8 +110,8 @@ MSIGN_NAME  = 'm';
 M_PLUS      = '1';
 M_MINUS     = '-1';
 
-RPLUS_TABLE_TAG  = 'tblRplus';
-RMINUS_TABLE_TAG = 'tblRminus';
+TPLUS_TABLE_TAG  = 'tblTplus';
+TMINUS_TABLE_TAG = 'tblTminus';
 
 %% --------------------- Refractive indices (n) ----------------------
 % All sensitivity calculations now track the same TMOKE resonance using the
@@ -318,14 +318,14 @@ else
                             ALPHA_NAME, MSIGN_NAME, ...
                             alphaCoarseRange(1), alphaCoarseRange(2), alphaCoarseRange(3), ...
                             globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
-                            M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
+                            M_PLUS, M_MINUS, TPLUS_TABLE_TAG, TMINUS_TABLE_TAG);
 
                         referenceFastIndex = fastTrackedEval.referenceIndex;
                         highestFastIndex = fastTrackedEval.highestNIndex;
 
                         alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
-                        reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
-                        reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                        transmissionPlusFastBase = fastTrackedEval.transmissionPlusByN{referenceFastIndex};
+                        transmissionMinusFastBase = fastTrackedEval.transmissionMinusByN{referenceFastIndex};
                         tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
 
                         tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
@@ -345,7 +345,7 @@ else
                             updateLivePlot('COARSE', ...
                                 domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                                 goldHeightGridNm(goldHeightIdx), ...
-                                alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
+                                alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
                         end
 
                         % Store candidate point data
@@ -503,14 +503,14 @@ else
                                 ALPHA_NAME, MSIGN_NAME, ...
                                 alphaStartDeg, alphaFineStep, alphaStopDeg, ...
                                 globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
-                                M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
+                                M_PLUS, M_MINUS, TPLUS_TABLE_TAG, TMINUS_TABLE_TAG);
 
                             referenceFastIndex = fastTrackedEval.referenceIndex;
                             highestFastIndex = fastTrackedEval.highestNIndex;
 
                             alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
-                            reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
-                            reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                            transmissionPlusFastBase = fastTrackedEval.transmissionPlusByN{referenceFastIndex};
+                            transmissionMinusFastBase = fastTrackedEval.transmissionMinusByN{referenceFastIndex};
                             tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
 
                             tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
@@ -521,7 +521,7 @@ else
 
                             if PLOT_LIVE
                                 updateLivePlot('FINE', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
                             end
 
                             fineRows = [fineRows; ...
@@ -665,14 +665,14 @@ else
                                 ALPHA_NAME, MSIGN_NAME, ...
                                 alphaStartDeg, alphaSuperStep, alphaStopDeg, ...
                                 globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, false, ...
-                                M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
+                                M_PLUS, M_MINUS, TPLUS_TABLE_TAG, TMINUS_TABLE_TAG);
 
                             referenceFastIndex = fastTrackedEval.referenceIndex;
                             highestFastIndex = fastTrackedEval.highestNIndex;
 
                             alphaGridFastBase = fastTrackedEval.alphaGridsByN{referenceFastIndex};
-                            reflectancePlusFastBase = fastTrackedEval.reflectancePlusByN{referenceFastIndex};
-                            reflectanceMinusFastBase = fastTrackedEval.reflectanceMinusByN{referenceFastIndex};
+                            transmissionPlusFastBase = fastTrackedEval.transmissionPlusByN{referenceFastIndex};
+                            transmissionMinusFastBase = fastTrackedEval.transmissionMinusByN{referenceFastIndex};
                             tmokeCurveFastBase = fastTrackedEval.tmokeCurvesByN{referenceFastIndex};
 
                             tmokePeakMagnitudeFastBase = fastTrackedEval.trackedTmokeAbsByN(referenceFastIndex);
@@ -683,7 +683,7 @@ else
 
                             if PLOT_LIVE
                                 updateLivePlot('SUPER', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, reflectancePlusFastBase, reflectanceMinusFastBase);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
                             end
 
                             superRows = [superRows; ...
@@ -771,14 +771,14 @@ validationTrackedEval = evaluateTrackedSensitivityAndCurves( ...
     ALPHA_NAME, MSIGN_NAME, ...
     0, alphaDenseStep, 89, ...
     globalAlphaSweepMinDeg, globalAlphaSweepMaxDeg, true, ...
-    M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
+    M_PLUS, M_MINUS, TPLUS_TABLE_TAG, TMINUS_TABLE_TAG);
 
 alphaPeakDegreesByN = validationTrackedEval.alphaPeakDegreesByN;
 trackedTmokeAbsByN = validationTrackedEval.trackedTmokeAbsByN;
 tmokeCurvesByN = validationTrackedEval.tmokeCurvesByN;
 alphaGridsByN = validationTrackedEval.alphaGridsByN;
-reflectancePlusByN = validationTrackedEval.reflectancePlusByN;
-reflectanceMinusByN = validationTrackedEval.reflectanceMinusByN;
+transmissionPlusByN = validationTrackedEval.transmissionPlusByN;
+transmissionMinusByN = validationTrackedEval.transmissionMinusByN;
 alphaVsNLinearFit = validationTrackedEval.linearFit;
 sensitivityDense = validationTrackedEval.sensitivitySlope;
 
@@ -804,9 +804,9 @@ for i = 1:numel(validationRefractiveIndexList)
     Ttmp = table( ...
         repmat(Ldom_best,numel(alphaGridsByN{i}),1), repmat(Lden_best,numel(alphaGridsByN{i}),1), repmat(hsi_best,numel(alphaGridsByN{i}),1), ...
         repmat(hau_best,numel(alphaGridsByN{i}),1), ...
-        ncol, alphaGridsByN{i}(:), reflectancePlusByN{i}(:), reflectanceMinusByN{i}(:), tmokeCurvesByN{i}(:), ...
+        ncol, alphaGridsByN{i}(:), transmissionPlusByN{i}(:), transmissionMinusByN{i}(:), tmokeCurvesByN{i}(:), ...
         'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_au_nm', ...
-                          'n','alpha_deg','Rplus','Rminus','TMOKE'});
+                          'n','alpha_deg','Tplus','Tminus','TMOKE'});
     bestDenseTable = [bestDenseTable; Ttmp]; %#ok<AGROW>
 end
 
@@ -850,25 +850,25 @@ end
 % clean export and baseline comparison with the VALID dense curves.
 setParamScalar(model, PARAM_N, baselineRefractiveIndex);
 
-[alphaFull, reflectancePlusFull, reflectanceMinusFull, tmokeFull] = solveAndGetRplusRminus( ...
+[alphaFull, transmissionPlusFull, transmissionMinusFull, tmokeFull] = solveAndGetTplusTminus( ...
     model, STUDY_TAG, ALPHA_NAME, MSIGN_NAME, ...
     0, alphaFullStep, 89, ...
-    M_PLUS, M_MINUS, RPLUS_TABLE_TAG, RMINUS_TABLE_TAG);
+    M_PLUS, M_MINUS, TPLUS_TABLE_TAG, TMINUS_TABLE_TAG);
 
 runsCompletedGlobal = runsCompletedGlobal + 2;
 
 if PLOT_LIVE
     updateLivePlot('FULL', Ldom_best, Lden_best, hsi_best, hau_best, ...
-        alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, reflectancePlusFull, reflectanceMinusFull);
+        alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, transmissionPlusFull, transmissionMinusFull);
 end
 
 bestFullTable = table( ...
     repmat(Ldom_best,numel(alphaFull),1), repmat(Lden_best,numel(alphaFull),1), repmat(hsi_best,numel(alphaFull),1), ...
     repmat(hau_best,numel(alphaFull),1), ...
     repmat(baselineRefractiveIndex,numel(alphaFull),1), ...
-    alphaFull(:), reflectancePlusFull(:), reflectanceMinusFull(:), tmokeFull(:), ...
+    alphaFull(:), transmissionPlusFull(:), transmissionMinusFull(:), tmokeFull(:), ...
     'VariableNames', {'L_domain_nm','l_dente_nm','h_si_nm','h_au_nm', ...
-                      'n','alpha_deg','Rplus','Rminus','TMOKE'});
+                      'n','alpha_deg','Tplus','Tminus','TMOKE'});
 
 %% ==================================================================
 %                               CSV / XLSX
@@ -884,7 +884,7 @@ writetable(bestFullTable,  fullfile(projectRootDir,'tmoke_sens_4D_sem_ceyig_best
 
 write_progress_xlsx(progressWorkbookPath, 'full', bestFullTable);
 if MAKE_PLOTS && SAVE_PHASE_PLOTS
-    saveFullPhasePlot(alphaFull, tmokeFull, reflectancePlusFull, reflectanceMinusFull, ...
+    saveFullPhasePlot(alphaFull, tmokeFull, transmissionPlusFull, transmissionMinusFull, ...
         baselineRefractiveIndex, phaseFigureOutputDirectory, FIG_FORMATS);
 end
 
@@ -1049,8 +1049,8 @@ function trackedEval = evaluateTrackedSensitivityAndCurves( ...
     trackedEval.tmokeAtTrackedPeakByN = zeros(size(refractiveIndexList));
     trackedEval.trackedTmokeAbsByN = zeros(size(refractiveIndexList));
     trackedEval.alphaGridsByN = cell(size(refractiveIndexList));
-    trackedEval.reflectancePlusByN = cell(size(refractiveIndexList));
-    trackedEval.reflectanceMinusByN = cell(size(refractiveIndexList));
+    trackedEval.transmissionPlusByN = cell(size(refractiveIndexList));
+    trackedEval.transmissionMinusByN = cell(size(refractiveIndexList));
     trackedEval.tmokeCurvesByN = cell(size(refractiveIndexList));
 
     evaluationOrder = buildTrackingEvaluationOrder(refractiveIndexList, trackingReferenceRefractiveIndex);
@@ -1070,14 +1070,14 @@ function trackedEval = evaluateTrackedSensitivityAndCurves( ...
         end
 
         setParamScalar(mdl, PARAM_N, nVal);
-        [alphaDeg, reflectancePlus, reflectanceMinus, tmokeCurve] = solveAndGetRplusRminus( ...
+        [alphaDeg, transmissionPlus, transmissionMinus, tmokeCurve] = solveAndGetTplusTminus( ...
             mdl, studyTag, alphaName, mName, ...
             sweepStartDeg, referenceSweepStepDeg, sweepStopDeg, ...
             mPlusStr, mMinusStr, ttagPlus, ttagMinus);
 
         trackedEval.alphaGridsByN{idx} = alphaDeg;
-        trackedEval.reflectancePlusByN{idx} = reflectancePlus;
-        trackedEval.reflectanceMinusByN{idx} = reflectanceMinus;
+        trackedEval.transmissionPlusByN{idx} = transmissionPlus;
+        trackedEval.transmissionMinusByN{idx} = transmissionMinus;
         trackedEval.tmokeCurvesByN{idx} = tmokeCurve;
 
         if idx == referenceIndex
@@ -1147,7 +1147,7 @@ function trackedPeakIndex = selectTrackedPeakIndex( ...
     trackedPeakIndex = candidateIndices(localIndex);
 end
 
-function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
+function [alpha_deg, Tplus, Tminus, TMOKE] = solveAndGetTplusTminus( ...
     mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, ...
     mPlusStr, mMinusStr, ttagPlus, ttagMinus)
 
@@ -1162,7 +1162,7 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mPlusStr);
     mdl.study(studyTag).run;
     refreshDerivedValues(mdl);
-    [alpha1_deg, R1] = readAlphaAndRFromNamedTable(mdl, ttagPlus, Npts);
+    [alpha1_deg, T1] = readAlphaAndTFromNamedTable(mdl, ttagPlus, Npts);
 
     % m = -1
     redirectAllNumericalsToTable(mdl, ttagMinus);
@@ -1170,18 +1170,18 @@ function [alpha_deg, Rplus, Rminus, TMOKE] = solveAndGetRplusRminus( ...
     setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mMinusStr);
     mdl.study(studyTag).run;
     refreshDerivedValues(mdl);
-    [alpha2_deg, R2] = readAlphaAndRFromNamedTable(mdl, ttagMinus, Npts);
+    [alpha2_deg, T2] = readAlphaAndTFromNamedTable(mdl, ttagMinus, Npts);
 
     assert(numel(alpha1_deg)==Npts && numel(alpha2_deg)==Npts, 'Unexpected alpha sweep length.');
     assert(max(abs(alpha1_deg - alpha2_deg)) < 1e-9, 'alpha grids differ between m=+1 and m=-1.');
 
     alpha_deg = alpha1_deg;
-    Rplus  = R1;
-    Rminus = R2;
+    Tplus  = T1;
+    Tminus = T2;
 
-    denom = Rplus + Rminus;
+    denom = Tplus + Tminus;
     denom(abs(denom) < 1e-9) = 1e-9;
-    TMOKE = (Rplus - Rminus) ./ denom;
+    TMOKE = 2 * (Tplus - Tminus) ./ denom;
 end
 
 function setTwoParamSweep(mdl, studyTag, alphaName, mName, aStartDeg, aStepDeg, aStopDeg, mStr)
@@ -1236,7 +1236,7 @@ function redirectAllNumericalsToTable(mdl, ttag)
     end
 end
 
-function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
+function [alpha_deg, Tcol] = readAlphaAndTFromNamedTable(mdl, ttag, Npts)
     S = mphtable(mdl, ttag);
 
     heads = [];
@@ -1249,25 +1249,25 @@ function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
         if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
             error('Table %s empty after run. Check Derived Values.', ttag);
         end
-        a = S.data(:,1); R = S.data(:,2);
+        a = S.data(:,1); T = S.data(:,2);
     else
         hlow = lower(heads);
         aIdx = find(contains(hlow,'alpha'), 1, 'first');
-        rIdx = find(contains(hlow,'reflectance') | contains(hlow,'total reflectance') | contains(hlow,' total r'), 1, 'first');
-        if isempty(aIdx) || isempty(rIdx)
+        tIdx = find(contains(hlow,'transmission') | contains(hlow,'transmittance') | contains(hlow,'total transmission') | contains(hlow,'total transmittance') | contains(hlow,' total t'), 1, 'first');
+        if isempty(aIdx) || isempty(tIdx)
             if ~isfield(S,'data') || isempty(S.data) || size(S.data,2) < 2
-                error('Alpha/Reflectance not found in %s and not enough columns.', ttag);
+                error('Alpha/Transmission not found in %s and not enough columns.', ttag);
             end
-            aIdx = 1; rIdx = 2;
+            aIdx = 1; tIdx = 2;
         end
-        a = S.data(:, aIdx); R = S.data(:, rIdx);
+        a = S.data(:, aIdx); T = S.data(:, tIdx);
     end
 
-    assert(numel(a) >= Npts && numel(R) >= Npts, ...
+    assert(numel(a) >= Npts && numel(T) >= Npts, ...
         'Table %s has %d rows; expected >= %d.', ttag, numel(a), Npts);
 
     a = a(end-Npts+1:end);
-    R = R(end-Npts+1:end);
+    T = T(end-Npts+1:end);
 
     if ~isempty(heads)
         hlow = lower(heads);
@@ -1275,7 +1275,7 @@ function [alpha_deg, Rcol] = readAlphaAndRFromNamedTable(mdl, ttag, Npts)
     end
 
     alpha_deg = a;
-    Rcol      = R;
+    Tcol      = T;
 end
 
 function s = fmt_time_long(sec)
@@ -1328,7 +1328,7 @@ function setAlphaMSweep(mdl, studyTag, alphaName, aStartDeg, aStepDeg, aStopDeg,
 end
 
 function save_checkpoint(checkpointFilePath, stage, runsCompletedGlobal, done_points, payload)
-    checkpointData.schema           = 'tracked_same_peak_v1';
+    checkpointData.schema           = 'tracked_same_peak_transmission_v1';
     checkpointData.stage            = char(stage);
     checkpointData.runsCompletedGlobal = runsCompletedGlobal;
     checkpointData.done_points      = done_points;
@@ -1370,7 +1370,7 @@ end
 
 function updateLivePlot(stage, Ldom, Lden, hsi, hau, ...
                         alpha_deg, TMOKE_vec, alpha_peak, tmoke_peak, ...
-                        Rplus, Rminus)
+                        Tplus, Tminus)
     persistent fig ax hTM hPeak hRp hRm inited
     if isempty(inited) || ~isvalidHandle(fig) || ~isvalidHandle(ax) || ...
        isempty(hTM)   || ~isvalidHandle(hTM)   || ...
@@ -1389,9 +1389,9 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hau, ...
         ylabel(ax,'TMOKE'); xlim(ax,[0 89]); xlabel(ax,'\alpha [deg]');
 
         yyaxis(ax,'right');
-        hRp = plot(ax, nan, nan, '--', 'LineWidth', 1.0, 'DisplayName','R^+(\alpha)');
-        hRm = plot(ax, nan, nan, ':',  'LineWidth', 1.0, 'DisplayName','R^-(\alpha)');
-        ylabel(ax,'Reflectance');
+        hRp = plot(ax, nan, nan, '--', 'LineWidth', 1.0, 'DisplayName','T^+(\alpha)');
+        hRm = plot(ax, nan, nan, ':',  'LineWidth', 1.0, 'DisplayName','T^-(\alpha)');
+        ylabel(ax,'Transmission');
 
         legend(ax,'Location','best');
         inited = true;
@@ -1402,9 +1402,9 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hau, ...
     set(hPeak, 'XData', alpha_peak, 'YData', tmoke_peak);
 
     yyaxis(ax,'right');
-    if nargin >= 11 && ~isempty(Rplus) && ~isempty(Rminus)
-        set(hRp, 'XData', alpha_deg, 'YData', Rplus);
-        set(hRm, 'XData', alpha_deg, 'YData', Rminus);
+    if nargin >= 11 && ~isempty(Tplus) && ~isempty(Tminus)
+        set(hRp, 'XData', alpha_deg, 'YData', Tplus);
+        set(hRm, 'XData', alpha_deg, 'YData', Tminus);
     else
         set(hRp, 'XData', nan, 'YData', nan);
         set(hRm, 'XData', nan, 'YData', nan);
@@ -1487,7 +1487,7 @@ function saveValidationPhasePlots(nList, alphaGridsByN, tmokeCurvesByN, ...
     saveFigureAndClose(fig, outDir, 'valid_dense_tracked_curves', formats);
 end
 
-function saveFullPhasePlot(alphaFull, tmokeFull, reflectancePlusFull, reflectanceMinusFull, ...
+function saveFullPhasePlot(alphaFull, tmokeFull, transmissionPlusFull, transmissionMinusFull, ...
         baselineRefractiveIndex, outDir, formats)
     if ~exist(outDir,'dir'), mkdir(outDir); end
 
@@ -1498,12 +1498,12 @@ function saveFullPhasePlot(alphaFull, tmokeFull, reflectancePlusFull, reflectanc
     ylabel('TMOKE');
     yyaxis right;
     hold on;
-    plot(alphaFull, reflectancePlusFull, '--', 'LineWidth', 1.0);
-    plot(alphaFull, reflectanceMinusFull, ':', 'LineWidth', 1.0);
-    ylabel('Reflectance');
+    plot(alphaFull, transmissionPlusFull, '--', 'LineWidth', 1.0);
+    plot(alphaFull, transmissionMinusFull, ':', 'LineWidth', 1.0);
+    ylabel('Transmission');
     xlabel('\alpha [deg]');
     title(sprintf('FULL baseline curve at n=%.3f', baselineRefractiveIndex));
-    legend({'TMOKE','R^+','R^-'}, 'Location','best');
+    legend({'TMOKE','T^+','T^-'}, 'Location','best');
     grid on;
 
     saveFigureAndClose(fig, outDir, 'full_baseline_curve', formats);
