@@ -268,6 +268,12 @@ if skipCoarseStage
     % When resuming past COARSE, restore previous coarse results/seeds instead of recomputing.
     if isfield(checkpointData.payload,'coarseResultsTable'), coarseResultsTable = checkpointData.payload.coarseResultsTable; end
     if isfield(checkpointData.payload,'coarseSeedCandidates'),   coarseSeedCandidates   = checkpointData.payload.coarseSeedCandidates;   end
+    % Safety net: an older/partial checkpoint may lack the seeds. Rebuild them
+    % from coarseResultsTable so the FINE/SUPER run-count planning stays exact.
+    if (isempty(coarseSeedCandidates) || height(coarseSeedCandidates)==0) && ~isempty(coarseResultsTable)
+        coarseSeedCandidates = selectTopK_tradeoff(coarseResultsTable, topKCoarse, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
+        warning('SKIP COARSE: coarseSeedCandidates missing in checkpoint -> rebuilt from coarseResultsTable.');
+    end
     fprintf('SKIP COARSE -> restored coarseResultsTable (rows=%d), coarseSeedCandidates (rows=%d)\n', ...
         size(coarseResultsTable,1), height(coarseSeedCandidates));
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
@@ -447,6 +453,12 @@ superSeedCandidates = [];
 if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SUPER","VALID","FULL"]))
     if isfield(checkpointData.payload,'fineResultsTable'),      fineResultsTable = checkpointData.payload.fineResultsTable; end
     if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
+    % Safety net: rebuild SUPER seeds from fineResultsTable if a partial
+    % checkpoint dropped them, keeping the SUPER run-count planning exact.
+    if (isempty(superSeedCandidates) || height(superSeedCandidates)==0) && ~isempty(fineResultsTable)
+        superSeedCandidates = selectTopK_tradeoff(fineResultsTable, topKFine, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
+        warning('SKIP FINE: superSeedCandidates missing in checkpoint -> rebuilt from fineResultsTable.');
+    end
     fprintf('SKIP FINE -> restored fineResultsTable (rows=%d), superSeedCandidates (rows=%d)\n', ...
         size(fineResultsTable,1), height(superSeedCandidates));
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
@@ -541,7 +553,8 @@ else
                                 100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
                             pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
-                            payload = struct('fineRows',fineRows, 'coarseSeedCandidates', coarseSeedCandidates);
+                            payload = struct('fineRows',fineRows, ...
+                                'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates);
                             pointsSinceCheckpoint = maybe_checkpoint( ...
                                 'FINE', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
                                 runsCompletedGlobal, pointsSinceCheckpoint, finePointIndex, payload, ...
@@ -560,7 +573,8 @@ else
     superSeedCandidates = selectTopK_tradeoff(fineResultsTable, topKFine, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
 
     save_checkpoint(checkpointFilePath, 'SUPER', runsCompletedGlobal, 0, struct( ...
-        'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates));
+        'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
+        'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates));
     write_progress_xlsx(progressWorkbookPath, 'fine', fineResultsTable);
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
         saveStageCandidatePlots(fineResultsTable, 'FINE', phaseFigureOutputDirectory, FIG_FORMATS);
@@ -703,7 +717,9 @@ else
                                 100*stageCompletionFraction, fmt_time_long(stageEtaSeconds), 100*globalCompletionFraction, fmt_time_long(globalEtaSeconds));
 
                             pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
-                            payload = struct('superRows',superRows, 'superSeedCandidates', superSeedCandidates);
+                            payload = struct('superRows',superRows, ...
+                                'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
+                                'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates);
                             pointsSinceCheckpoint = maybe_checkpoint( ...
                                 'SUPER', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
                                 runsCompletedGlobal, pointsSinceCheckpoint, superPointIndex, payload, ...
@@ -730,7 +746,8 @@ else
     fprintf('Best |S| only:\n');          disp(bestSensitivityCandidate);
 
     save_checkpoint(checkpointFilePath, 'VALID', runsCompletedGlobal, 0, struct( ...
-        'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superResultsTable', superResultsTable, ...
+        'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
+        'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates, 'superResultsTable', superResultsTable, ...
         'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate));
     write_progress_xlsx(progressWorkbookPath, 'super', superResultsTable);
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
@@ -811,7 +828,8 @@ for i = 1:numel(validationRefractiveIndexList)
 end
 
 save_checkpoint(checkpointFilePath, 'FULL', runsCompletedGlobal, 0, struct( ...
-    'coarseResultsTable', coarseResultsTable, 'fineResultsTable', fineResultsTable, 'superResultsTable', superResultsTable, ...
+    'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
+    'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates, 'superResultsTable', superResultsTable, ...
     'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate, ...
     'bestDenseTable', bestDenseTable, 'sensitivityDense', sensitivityDense, ...
     'alphaBestDeg', alphaBestDeg, 'tmokeBestValue', tmokeBestValue));
