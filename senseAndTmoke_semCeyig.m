@@ -184,6 +184,18 @@ phaseFigureOutputDirectory = fullfile(figureOutputDirectory, 'phase_outputs');
 if SAVE_FIGS && ~exist(figureOutputDirectory,'dir'), mkdir(figureOutputDirectory); end
 if SAVE_PHASE_PLOTS && ~exist(phaseFigureOutputDirectory,'dir'), mkdir(phaseFigureOutputDirectory); end
 
+%% --------- Save TMOKE vs alpha plot at every iteration --------------
+% Persist the live TMOKE-vs-alpha curve to disk for every evaluated
+% geometry point (one PNG per iteration), organized by stage subfolder.
+% NOTE: requires PLOT_LIVE = true, since the saved frame reuses the live figure.
+SAVE_ITER_PLOTS = true;                                 % Save the TMOKE-vs-alpha curve at each iteration
+if SAVE_ITER_PLOTS
+    iterationFigureOutputDirectory = fullfile(figureOutputDirectory, 'iteration_tmoke');
+    if ~exist(iterationFigureOutputDirectory,'dir'), mkdir(iterationFigureOutputDirectory); end
+else
+    iterationFigureOutputDirectory = '';
+end
+
 %% ------------------------- Load model ------------------------------
 ModelUtil.clear;                        % Clear any previous COMSOL models from memory
 model = mphload(comsolModelFile);       % Load the COMSOL model to be driven
@@ -351,7 +363,8 @@ else
                             updateLivePlot('COARSE', ...
                                 domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                                 goldHeightGridNm(goldHeightIdx), ...
-                                alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
+                                alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
+                                iterationFigureOutputDirectory);
                         end
 
                         % Store candidate point data
@@ -533,7 +546,8 @@ else
 
                             if PLOT_LIVE
                                 updateLivePlot('FINE', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
+                                    iterationFigureOutputDirectory);
                             end
 
                             fineRows = [fineRows; ...
@@ -697,7 +711,8 @@ else
 
                             if PLOT_LIVE
                                 updateLivePlot('SUPER', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
-                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase);
+                                    alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
+                                    iterationFigureOutputDirectory);
                             end
 
                             superRows = [superRows; ...
@@ -877,7 +892,8 @@ runsCompletedGlobal = runsCompletedGlobal + 2;
 
 if PLOT_LIVE
     updateLivePlot('FULL', Ldom_best, Lden_best, hsi_best, hau_best, ...
-        alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, transmissionPlusFull, transmissionMinusFull);
+        alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, transmissionPlusFull, transmissionMinusFull, ...
+        iterationFigureOutputDirectory);
 end
 
 bestFullTable = table( ...
@@ -1388,8 +1404,8 @@ end
 
 function updateLivePlot(stage, Ldom, Lden, hsi, hau, ...
                         alpha_deg, TMOKE_vec, alpha_peak, tmoke_peak, ...
-                        Tplus, Tminus)
-    persistent fig ax hTM hPeak hRp hRm inited
+                        Tplus, Tminus, saveDir)
+    persistent fig ax hTM hPeak hRp hRm inited frameCounters
     if isempty(inited) || ~isvalidHandle(fig) || ~isvalidHandle(ax) || ...
        isempty(hTM)   || ~isvalidHandle(hTM)   || ...
        isempty(hPeak) || ~isvalidHandle(hPeak) || ...
@@ -1432,6 +1448,27 @@ function updateLivePlot(stage, Ldom, Lden, hsi, hau, ...
         stage, Ldom, Lden, hsi, hau, abs(tmoke_peak), alpha_peak));
 
     drawnow('limitrate');
+
+    % Save the current TMOKE-vs-alpha frame for this iteration, one PNG per
+    % evaluated geometry point, grouped into a per-stage subfolder.
+    if nargin >= 12 && ~isempty(saveDir)
+        if isempty(frameCounters)
+            frameCounters = containers.Map('KeyType','char','ValueType','double');
+        end
+        if ~isKey(frameCounters, stage), frameCounters(stage) = 0; end
+        frameCounters(stage) = frameCounters(stage) + 1;
+        iterIndex = frameCounters(stage);
+
+        stageDir = fullfile(saveDir, stage);
+        if ~exist(stageDir,'dir'), mkdir(stageDir); end
+        baseName = sprintf('%s_%05d_Ldom%g_Lden%g_hsi%g_hau%.3f', ...
+            stage, iterIndex, Ldom, Lden, hsi, hau);
+        try
+            exportgraphics(fig, fullfile(stageDir, [baseName '.png']), 'Resolution', 150);
+        catch ME
+            warning('Failed to save iteration plot %s: %s', baseName, ME.message);
+        end
+    end
 end
 
 function saveStageCandidatePlots(T, stageName, outDir, formats)
