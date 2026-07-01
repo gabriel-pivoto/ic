@@ -74,7 +74,7 @@ fprintf('  L_domain = %.2f nm | l_dente = %.2f nm | h_si = %.2f nm | h_au = %.2f
 fprintf('  |TMOKE| = %.5f @ alpha = %.3f deg | S = %+.4f deg/RIU\n', tmk, alpha, Sens);
 
 %% ------------------------- Draw figure -----------------------------
-fig = figure('Color','w','Position',[100 100 560 560]);
+fig = figure('Color','w','Position',[100 100 620 470]);
 ax  = axes(fig); hold(ax,'on'); box(ax,'on');
 
 xHalf   = nCells*Ldom/2;
@@ -96,21 +96,21 @@ end
 % --- dimension callouts with extension lines (all clear of the shapes) -
 cx = xLeft + floor(nCells/2)*Ldom;             % left edge of central cell
 
-% L_domain : below the block
-yLdom = -0.16*hSi;
+% L_domain : below the block, with a clear gap from the axis border
+yLdom = -0.24*hSi;
 drawHDim(ax, cx, cx+Ldom, yLdom, sprintf('L_{domain} = %.0f nm', Ldom), false, [0 0]);
 
 % l_dente : well above the tooth, with extension lines from the tooth top
 yLden = hSi + hAu + 0.28*hSi;
 drawHDim(ax, -Lden/2, Lden/2, yLden, sprintf('l_{dente} = %.0f nm', Lden), true, [hSi+hAu hSi+hAu]);
 
-% h_si : left of the block
-xHsi = xLeft - 0.05*Ldom;
-drawVDim(ax, xHsi, 0, hSi, sprintf('h_{si} = %.0f nm', hSi), xHsi-0.05*Ldom, xLeft);
+% h_si : left of the block (kept close to trim the figure width)
+xHsi = xLeft - 0.035*Ldom;
+drawVDim(ax, xHsi, 0, hSi, sprintf('h_{si} = %.0f nm', hSi), xHsi-0.04*Ldom, xLeft);
 
-% h_au : right of the tooth
-xHau = Lden/2 + 0.06*Ldom;
-drawVDim(ax, xHau, hSi, hSi+hAu, sprintf('h_{au} = %.1f nm', hAu), xHau+0.055*Ldom, Lden/2);
+% h_au : right of the tooth, with its own extension lines
+xHau = Lden/2 + 0.07*Ldom;
+drawVDim(ax, xHau, hSi, hSi+hAu, sprintf('h_{au} = %.1f nm', hAu), xHau+0.05*Ldom, Lden/2);
 
 % --- material legend (top-left air corner, clear of the structure) ---
 hAir  = patch(ax,NaN,NaN,colAir ,'EdgeColor',[0.5 0.5 0.5],'DisplayName','Air');
@@ -120,8 +120,8 @@ legend(ax,[hGold hSiO2 hAir],'Location','northwest','FontSize',9);
 
 % --- axes cosmetics ---------------------------------------------------
 axis(ax,'equal');
-xlim(ax,[xLeft-0.16*Ldom, xRight+0.14*Ldom]);
-ylim(ax,[-0.32*hSi, airTop]);
+xlim(ax,[xLeft-0.10*Ldom, xRight+0.05*Ldom]);
+ylim(ax,[-0.44*hSi, airTop]);
 xlabel(ax,'x [nm]'); ylabel(ax,'y [nm]');
 title(ax, {sprintf('Geometria final (%s) \\alpha_{peak} = %.3f\\circ', bestLabel, alpha), ...
     sprintf('|TMOKE| = %.5f   |   S = %+.4f deg/RIU', tmk, Sens)}, ...
