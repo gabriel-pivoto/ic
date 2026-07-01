@@ -24,7 +24,7 @@ checkpointFilePath = fullfile(projectRootDir, 'checkpoints', ...
 graphicsOutputDir  = fullfile(projectRootDir, 'graficos');
 
 whichBest = 'tradeoff';   % 'tradeoff' | 'tmoke' | 'sens'
-nCells    = 3;            % number of periods to draw (odd -> centered tooth)
+nCells    = 1;            % number of periods (teeth) to draw
 
 % COMSOL-like material colors
 colAir = [0.945 0.945 0.960];
@@ -100,18 +100,15 @@ drawHDim(ax, -Lden/2, Lden/2, hSi+hAu+0.06*hSi, sprintf('l_{dente} = %.0f nm', L
 drawVDim(ax, xLeft-0.06*Ldom, 0, hSi,       sprintf('h_{si} = %.0f nm', hSi));
 drawVDim(ax, Lden/2+0.10*Ldom, hSi, hSi+hAu, sprintf('h_{au} = %.1f nm', hAu));
 
-% --- incidence angle arrow (alpha from surface normal) ---------------
-drawIncidence(ax, 0, hSi+hAu, alpha, 0.9*hSi);
-
-% --- material legend --------------------------------------------------
+% --- material legend (placed OUTSIDE the axes to avoid overlap) -------
 hAir  = patch(ax,NaN,NaN,colAir ,'EdgeColor',[0.5 0.5 0.5],'DisplayName','Air');
 hSiO2 = patch(ax,NaN,NaN,colSiO2,'EdgeColor',[0.35 0.35 0.45],'DisplayName','SiO_2');
 hGold = patch(ax,NaN,NaN,colAu  ,'EdgeColor',[0.4 0.3 0.05],'DisplayName','Au');
-legend(ax,[hGold hSiO2 hAir],'Location','northeast','FontSize',10);
+legend(ax,[hGold hSiO2 hAir],'Location','northeastoutside','FontSize',10);
 
 % --- axes cosmetics ---------------------------------------------------
 axis(ax,'equal');
-xlim(ax,[xLeft-0.18*Ldom, xRight+0.18*Ldom]);
+xlim(ax,[xLeft-0.30*Ldom, xRight+0.30*Ldom]);
 ylim(ax,[-0.22*hSi, airTop]);
 xlabel(ax,'x [nm]'); ylabel(ax,'y [nm]');
 title(ax, {sprintf('Geometria final (%s) \\alpha_{peak} = %.3f\\circ', bestLabel, alpha), ...
@@ -176,19 +173,6 @@ function drawVDim(ax, x, y1, y2, label)
     text(ax, x, (y1+y2)/2, label, 'HorizontalAlignment','center', ...
         'VerticalAlignment','bottom','Rotation',90,'FontSize',9, ...
         'BackgroundColor','w','Margin',1);
-end
-
-function drawIncidence(ax, xs, ys, alphaDeg, L)
-    % Draw an incident-light arrow hitting (xs,ys) at alpha from normal (+y),
-    % plus a dashed surface normal and the angle label.
-    a  = deg2rad(alphaDeg);
-    dx = -sin(a); dy = cos(a);                 % direction from source to surface
-    x0 = xs - L*dx; y0 = ys + L*dy;            % source point (above surface)
-    quiver(ax, x0, y0, xs-x0, ys-y0, 0, 'r', 'LineWidth',1.6, ...
-        'MaxHeadSize',0.4, 'AutoScale','off');
-    plot(ax,[xs xs],[ys ys+0.55*L],'k--','LineWidth',0.8);   % surface normal
-    text(ax, x0, y0, sprintf('  k_{inc}, \\alpha=%.2f\\circ', alphaDeg), ...
-        'Color','r','FontSize',9,'VerticalAlignment','bottom');
 end
 
 % Selection helpers -- identical to senseAndTmoke_semCeyig.m
