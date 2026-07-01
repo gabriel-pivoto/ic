@@ -74,12 +74,12 @@ fprintf('  L_domain = %.2f nm | l_dente = %.2f nm | h_si = %.2f nm | h_au = %.2f
 fprintf('  |TMOKE| = %.5f @ alpha = %.3f deg | S = %+.4f deg/RIU\n', tmk, alpha, Sens);
 
 %% ------------------------- Draw figure -----------------------------
-fig = figure('Color','w','Position',[100 100 760 720]);
+fig = figure('Color','w','Position',[100 100 560 560]);
 ax  = axes(fig); hold(ax,'on'); box(ax,'on');
 
 xHalf   = nCells*Ldom/2;
 xLeft   = -xHalf;  xRight = xHalf;
-airTop  = hSi + hAu + max([0.55*hSi, 4*hAu, 250]);
+airTop  = hSi + hAu + 0.60*hSi;
 
 % --- material patches (order: air background -> substrate -> teeth) ---
 rectangle(ax,'Position',[xLeft 0 (xRight-xLeft) airTop], ...
@@ -93,23 +93,35 @@ for k = 0:(nCells-1)
         'FaceColor',colAu,'EdgeColor',[0.4 0.3 0.05],'LineWidth',0.75); % Au tooth
 end
 
-% --- dimension callouts (all placed in the AIR, clear of the shapes) --
+% --- dimension callouts with extension lines (all clear of the shapes) -
 cx = xLeft + floor(nCells/2)*Ldom;             % left edge of central cell
-drawHDim(ax, cx, cx+Ldom, -0.14*hSi,            sprintf('L_{domain} = %.0f nm', Ldom), false); % below block
-drawHDim(ax, -Lden/2, Lden/2, hSi+hAu+0.18*hSi, sprintf('l_{dente} = %.0f nm', Lden), true);   % above tooth
-drawVDim(ax, xLeft-0.06*Ldom, 0, hSi,           sprintf('h_{si} = %.0f nm', hSi),  xLeft-0.13*Ldom);   % left of block
-drawVDim(ax, Lden/2+0.10*Ldom, hSi, hSi+hAu,    sprintf('h_{au} = %.1f nm', hAu),  Lden/2+0.17*Ldom);  % right of tooth
 
-% --- material legend (placed OUTSIDE the axes to avoid overlap) -------
+% L_domain : below the block
+yLdom = -0.16*hSi;
+drawHDim(ax, cx, cx+Ldom, yLdom, sprintf('L_{domain} = %.0f nm', Ldom), false, [0 0]);
+
+% l_dente : well above the tooth, with extension lines from the tooth top
+yLden = hSi + hAu + 0.28*hSi;
+drawHDim(ax, -Lden/2, Lden/2, yLden, sprintf('l_{dente} = %.0f nm', Lden), true, [hSi+hAu hSi+hAu]);
+
+% h_si : left of the block
+xHsi = xLeft - 0.05*Ldom;
+drawVDim(ax, xHsi, 0, hSi, sprintf('h_{si} = %.0f nm', hSi), xHsi-0.05*Ldom, xLeft);
+
+% h_au : right of the tooth
+xHau = Lden/2 + 0.06*Ldom;
+drawVDim(ax, xHau, hSi, hSi+hAu, sprintf('h_{au} = %.1f nm', hAu), xHau+0.055*Ldom, Lden/2);
+
+% --- material legend (top-left air corner, clear of the structure) ---
 hAir  = patch(ax,NaN,NaN,colAir ,'EdgeColor',[0.5 0.5 0.5],'DisplayName','Air');
 hSiO2 = patch(ax,NaN,NaN,colSiO2,'EdgeColor',[0.35 0.35 0.45],'DisplayName','SiO_2');
 hGold = patch(ax,NaN,NaN,colAu  ,'EdgeColor',[0.4 0.3 0.05],'DisplayName','Au');
-legend(ax,[hGold hSiO2 hAir],'Location','northeastoutside','FontSize',10);
+legend(ax,[hGold hSiO2 hAir],'Location','northwest','FontSize',9);
 
 % --- axes cosmetics ---------------------------------------------------
 axis(ax,'equal');
-xlim(ax,[xLeft-0.30*Ldom, xRight+0.30*Ldom]);
-ylim(ax,[-0.30*hSi, airTop]);
+xlim(ax,[xLeft-0.16*Ldom, xRight+0.14*Ldom]);
+ylim(ax,[-0.32*hSi, airTop]);
 xlabel(ax,'x [nm]'); ylabel(ax,'y [nm]');
 title(ax, {sprintf('Geometria final (%s) \\alpha_{peak} = %.3f\\circ', bestLabel, alpha), ...
     sprintf('|TMOKE| = %.5f   |   S = %+.4f deg/RIU', tmk, Sens)}, ...
@@ -156,26 +168,36 @@ function T = pickMostAdvancedTable(payload, columnNames)
     T.Properties.UserData = stageUsed;
 end
 
-function drawHDim(ax, x1, x2, y, label, above)
-    % Horizontal dimension line with end ticks; label sits above/below it.
-    tick = 0.03*abs(x2-x1) + eps;
+function drawHDim(ax, x1, x2, y, label, above, ext)
+    % Horizontal dimension line with end ticks and optional extension
+    % lines (from ext(1)/ext(2) up/down to y). Label sits above/below.
+    tick = 0.02*abs(x2-x1) + eps;
+    if nargin >= 7 && ~isempty(ext)
+        plot(ax,[x1 x1],[ext(1) y],'k-','LineWidth',0.5);
+        plot(ax,[x2 x2],[ext(2) y],'k-','LineWidth',0.5);
+    end
     plot(ax,[x1 x2],[y y],'k-','LineWidth',1);
     plot(ax,[x1 x1],[y-tick y+tick],'k-','LineWidth',1);
     plot(ax,[x2 x2],[y-tick y+tick],'k-','LineWidth',1);
     if above, va = 'bottom'; else, va = 'top'; end
     text(ax,(x1+x2)/2, y, label, 'HorizontalAlignment','center', ...
-        'VerticalAlignment',va,'FontSize',9,'BackgroundColor','none','Margin',1);
+        'VerticalAlignment',va,'FontSize',9,'BackgroundColor','none','Margin',2);
 end
 
-function drawVDim(ax, x, y1, y2, label, textX)
-    % Vertical dimension line at x with end ticks; rotated label at textX.
+function drawVDim(ax, x, y1, y2, label, textX, extFrom)
+    % Vertical dimension line at x with end ticks and optional extension
+    % lines (from extFrom to x). Rotated label placed at textX.
     tick = 0.10*abs(x-textX) + eps;
+    if nargin >= 7 && ~isempty(extFrom)
+        plot(ax,[extFrom x],[y1 y1],'k-','LineWidth',0.5);
+        plot(ax,[extFrom x],[y2 y2],'k-','LineWidth',0.5);
+    end
     plot(ax,[x x],[y1 y2],'k-','LineWidth',1);
     plot(ax,[x-tick x+tick],[y1 y1],'k-','LineWidth',1);
     plot(ax,[x-tick x+tick],[y2 y2],'k-','LineWidth',1);
     text(ax, textX, (y1+y2)/2, label, 'HorizontalAlignment','center', ...
         'VerticalAlignment','middle','Rotation',90,'FontSize',9, ...
-        'BackgroundColor','none','Margin',1);
+        'BackgroundColor','none','Margin',2);
 end
 
 % Selection helpers -- identical to senseAndTmoke_semCeyig.m
