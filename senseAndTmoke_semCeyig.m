@@ -19,7 +19,7 @@
 %                           alpha sweep limits)
 %                        3) fit alpha_peak vs n and use the slope as S.
 %
-% In the VALID stage, on the best candidate, we recompute the same tracked
+% In the SENSITIVITY FULL stage, on the best candidate, we recompute the same tracked
 % sensitivity with a dense alpha step:
 %   - validationRefractiveIndexList = [1.30 1.33 1.36]
 %   - sensitivityDense = slope of alpha_peak vs n (deg/RIU) from linear fit.
@@ -42,8 +42,8 @@
 %     -> pick TOP-K seeds (trade-off score)
 %     -> SUPER  (final refinement, recompute metrics)
 %     -> choose bestTradeoffCandidate + bestTmokeCandidate + bestSensitivityCandidate
-%     -> VALID  (dense curves on bestTradeoffCandidate to compute sensitivityDense)
-%     -> FULL   (final baseline curve + CSV/XLSX export)
+%     -> SENSITIVITY FULL (dense curves on bestTradeoffCandidate to compute sensitivityDense)
+%     -> TMOKE FULL       (final baseline curve + CSV/XLSX export)
 %     -> SAVE FIGURES
 %     -> End
 % =====================================================================
@@ -52,8 +52,8 @@ import com.comsol.model.*;               % Import COMSOL model classes
 import com.comsol.model.util.*;          % Import COMSOL utility helpers
 
 %% --------------------------- Paths/Project -------------------------
-projectRootDir  = 'C:\Users\gabri\Documents\projetoIC';       % Root folder that holds the COMSOL project and outputs
-comsolModelFile = fullfile(projectRootDir,'usandoMatlab.mph');          % COMSOL model file to open
+projectRootDir  = 'D:\Gabriel Pivoto\projetoIC';       % Root folder that holds the COMSOL project and outputs
+comsolModelFile = fullfile(projectRootDir,'modelosimplificado.mph');          % COMSOL model file to open
 addpath(genpath(projectRootDir));                                       % Expose all helper scripts in the project to MATLAB
 
 %% ------------------------ Run budget (optional) ---------------------
@@ -124,7 +124,7 @@ trackingReferenceRefractiveIndex = 1.33;
 trackingHalfWindowDeg = 20;
 baselineRefractiveIndex = trackingReferenceRefractiveIndex; % The TMOKE score still uses the reference n = 1.33
 
-% VALID uses the same tracked-n list, but with a much denser alpha step.
+% SENSITIVITY FULL uses the same tracked-n list, but with a much denser alpha step.
 validationRefractiveIndexList = [1.30, 1.33, 1.36];
 
 
@@ -245,9 +245,9 @@ superTotalPoints    = topKFine * superPointsPerSeed;
 superTotalRuns   = runsPerSearchPoint * superTotalPoints;
 
 % Extra runs that always happen:
-% - VALID: 2 runs per validationRefractiveIndexList element (m = +/-1) => 2*len(validationRefractiveIndexList)
+% - SENSITIVITY FULL: 2 runs per validationRefractiveIndexList element (m = +/-1) => 2*len(validationRefractiveIndexList)
 % - snapshot: 2 runs (m = +/-1) at a fixed alpha in baselineRefractiveIndex
-% - FULL: 2 runs (m = +/-1) full sweep at baselineRefractiveIndex
+% - TMOKE FULL: 2 runs (m = +/-1) full sweep at baselineRefractiveIndex
 extraRunsFixed = 2*numel(validationRefractiveIndexList) + (SAVE_SNAPSHOT*2) + 2;
 
 globalRunTargetEstimate = coarseTotalRuns + fineTotalRunsEstimate + superTotalRuns + extraRunsFixed;
@@ -275,7 +275,7 @@ fprintf('  TOTAL  (estimate): %d runs\n\n', globalRunTargetEstimate);
 coarseResultsTable = [];
 coarseSeedCandidates   = [];
 
-skipCoarseStage = resumeFromCheckpoint && any(strcmp(resumeStageTag, ["FINE","SUPER","VALID","FULL"]));
+skipCoarseStage = resumeFromCheckpoint && any(strcmp(resumeStageTag, ["FINE","SUPER","SENSITIVITY FULL","TMOKE FULL"]));
 if skipCoarseStage
     % When resuming past COARSE, restore previous coarse results/seeds instead of recomputing.
     if isfield(checkpointData.payload,'coarseResultsTable'), coarseResultsTable = checkpointData.payload.coarseResultsTable; end
@@ -463,7 +463,7 @@ end
 fineResultsTable = [];
 superSeedCandidates = [];
 
-if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SUPER","VALID","FULL"]))
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SUPER","SENSITIVITY FULL","TMOKE FULL"]))
     if isfield(checkpointData.payload,'fineResultsTable'),      fineResultsTable = checkpointData.payload.fineResultsTable; end
     if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
     % Safety net: rebuild SUPER seeds from fineResultsTable if a partial
@@ -634,7 +634,7 @@ fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
 superResultsTable = [];
 bestTradeoffCandidate = table(); bestTmokeCandidate = table(); bestSensitivityCandidate = table();
 
-if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["VALID","FULL"]))
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SENSITIVITY FULL","TMOKE FULL"]))
     if isfield(checkpointData.payload,'superResultsTable'), superResultsTable = checkpointData.payload.superResultsTable; end
     if isfield(checkpointData.payload,'bestTradeoffCandidate'), bestTradeoffCandidate = checkpointData.payload.bestTradeoffCandidate; end
     if isfield(checkpointData.payload,'bestTmokeCandidate'),    bestTmokeCandidate    = checkpointData.payload.bestTmokeCandidate;    end
@@ -760,7 +760,7 @@ else
     fprintf('Best TMOKE only:\n');         disp(bestTmokeCandidate);
     fprintf('Best |S| only:\n');          disp(bestSensitivityCandidate);
 
-    save_checkpoint(checkpointFilePath, 'VALID', runsCompletedGlobal, 0, struct( ...
+    save_checkpoint(checkpointFilePath, 'SENSITIVITY FULL', runsCompletedGlobal, 0, struct( ...
         'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
         'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates, 'superResultsTable', superResultsTable, ...
         'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate));
@@ -771,7 +771,7 @@ else
 end
 
 %% ==================================================================
-%                 VALID: dense curves + tracked sensitivityDense (3 n values)
+%                 SENSITIVITY FULL: dense curves + tracked sensitivityDense (3 n values)
 % ------------------------------------------------------------------
 % Fix geometry to bestTradeoffCandidate and:
 %   - sweep dense alpha for each validationRefractiveIndexList value,
@@ -780,7 +780,7 @@ end
 %   - store dense tables for later export/plots.
 % ==================================================================
 % From here, geometry is fixed to bestTradeoffCandidate (best compromise).
-if isempty(bestTradeoffCandidate) && resumeFromCheckpoint && any(strcmp(resumeStageTag, ["VALID","FULL"]))
+if isempty(bestTradeoffCandidate) && resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SENSITIVITY FULL","TMOKE FULL"]))
     bestTradeoffCandidate = checkpointData.payload.bestTradeoffCandidate;
 end
 
@@ -794,7 +794,7 @@ setParamNm(model, PARAM_LDEN, Lden_best);
 setParamNm(model, PARAM_HSI,  hsi_best);
 setParamNm(model, PARAM_HAU,  hau_best);
 
-% VALID reuses the same "follow the same resonance" logic, but here every n
+% SENSITIVITY FULL reuses the same "follow the same resonance" logic, but here every n
 % is swept over the full dense alpha range so the final plots/export keep
 % the complete TMOKE(alpha) curves.
 validationTrackedEval = evaluateTrackedSensitivityAndCurves( ...
@@ -816,7 +816,7 @@ sensitivityDense = validationTrackedEval.sensitivitySlope;
 
 runsCompletedGlobal = runsCompletedGlobal + 2*numel(validationRefractiveIndexList);
 
-fprintf('\n===== VALID (bestTradeoffCandidate) =====\n');
+fprintf('\n===== SENSITIVITY FULL (bestTradeoffCandidate) =====\n');
 fprintf('Best geom: Ldom=%g | Lden=%g | hsi=%g | hau=%g\n', ...
     Ldom_best, Lden_best, hsi_best, hau_best);
 fprintf('alpha_peak(n) = ['); fprintf(' %.4f', alphaPeakDegreesByN); fprintf(' ]\n');
@@ -842,7 +842,7 @@ for i = 1:numel(validationRefractiveIndexList)
     bestDenseTable = [bestDenseTable; Ttmp]; %#ok<AGROW>
 end
 
-save_checkpoint(checkpointFilePath, 'FULL', runsCompletedGlobal, 0, struct( ...
+save_checkpoint(checkpointFilePath, 'TMOKE FULL', runsCompletedGlobal, 0, struct( ...
     'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
     'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates, 'superResultsTable', superResultsTable, ...
     'bestTradeoffCandidate', bestTradeoffCandidate, 'bestTmokeCandidate', bestTmokeCandidate, 'bestSensitivityCandidate', bestSensitivityCandidate, ...
@@ -877,10 +877,10 @@ if SAVE_SNAPSHOT
 end
 
 %% ==================================================================
-%                     FULL: final baselineRefractiveIndex curve
+%                     TMOKE FULL: final baselineRefractiveIndex curve
 % ==================================================================
-% FULL keeps the standard single-n (baselineRefractiveIndex) curve for a
-% clean export and baseline comparison with the VALID dense curves.
+% TMOKE FULL keeps the standard single-n (baselineRefractiveIndex) curve for a
+% clean export and baseline comparison with the SENSITIVITY FULL dense curves.
 setParamScalar(model, PARAM_N, baselineRefractiveIndex);
 
 [alphaFull, transmissionPlusFull, transmissionMinusFull, tmokeFull] = solveAndGetTplusTminus( ...
@@ -891,7 +891,7 @@ setParamScalar(model, PARAM_N, baselineRefractiveIndex);
 runsCompletedGlobal = runsCompletedGlobal + 2;
 
 if PLOT_LIVE
-    updateLivePlot('FULL', Ldom_best, Lden_best, hsi_best, hau_best, ...
+    updateLivePlot('TMOKE FULL', Ldom_best, Lden_best, hsi_best, hau_best, ...
         alphaFull, tmokeFull, alphaBestDeg, tmokeBestValue, transmissionPlusFull, transmissionMinusFull, ...
         iterationFigureOutputDirectory);
 end
@@ -934,8 +934,8 @@ if isfile(checkpointFilePath), delete(checkpointFilePath); end
 % Saved to figureOutputDirectory when SAVE_FIGS is true.
 % ==================================================================
 if MAKE_PLOTS
-    % (1) TMOKE(alpha) for each n (VALID)
-    figure('Name','(1) TMOKE(alpha) for each n (VALID)','NumberTitle','off','Color','w');
+    % (1) TMOKE(alpha) for each n (SENSITIVITY FULL)
+    figure('Name','(1) TMOKE(alpha) for each n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
     hold on; grid on;
     for i = 1:numel(validationRefractiveIndexList)
         plot(alphaGridsByN{i}, tmokeCurvesByN{i}, 'LineWidth', 1.2, 'DisplayName', sprintf('n=%.2f', validationRefractiveIndexList(i)));
@@ -945,7 +945,7 @@ if MAKE_PLOTS
     legend('Location','best');
 
     % (2) alpha_peak vs n + fit
-    figure('Name','(2) alpha_peak vs n (VALID)','NumberTitle','off','Color','w');
+    figure('Name','(2) alpha_peak vs n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
     hold on; grid on;
     plot(validationRefractiveIndexList, alphaPeakDegreesByN, 'o', 'LineWidth', 1.5, 'DisplayName','data');
     nfit = linspace(min(validationRefractiveIndexList), max(validationRefractiveIndexList), 100);
@@ -955,7 +955,7 @@ if MAKE_PLOTS
     legend('Location','best');
 
     % (3) |TMOKE| at the tracked peak vs n
-    figure('Name','(3) |TMOKE| at tracked peak vs n (VALID)','NumberTitle','off','Color','w');
+    figure('Name','(3) |TMOKE| at tracked peak vs n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
     grid on; hold on;
     plot(validationRefractiveIndexList, trackedTmokeAbsByN, 'o-', 'LineWidth', 1.5);
     xlabel('n'); ylabel('|TMOKE| at tracked peak');
@@ -992,7 +992,7 @@ fprintf('\n===== SUMMARY =====\n');
 fprintf('Best TRADE-OFF (SUPER):\n'); disp(bestTradeoffCandidate);
 fprintf('Best TMOKE only (SUPER):\n'); disp(bestTmokeCandidate);
 fprintf('Best |sensitivityEstimateFast| only (SUPER):\n'); disp(bestSensitivityCandidate);
-fprintf('VALID @ bestTradeoffCandidate: sensitivityDense ~= %.6f deg/RIU\n', sensitivityDense);
+fprintf('SENSITIVITY FULL @ bestTradeoffCandidate: sensitivityDense ~= %.6f deg/RIU\n', sensitivityDense);
 fprintf('Runs done: %d | Elapsed: %s\n', runsCompletedGlobal, fmt_time_long(elapsed_total));
 
 diary off;
@@ -1059,7 +1059,7 @@ function trackedEval = evaluateTrackedSensitivityAndCurves( ...
 %   - the other n values are solved only on the tracked window around the
 %     reference peak, unless sweepAllNonReferenceCurves=true
 %
-% VALID-stage behavior:
+% SENSITIVITY FULL-stage behavior:
 %   - all n values are swept on the full dense alpha range
 %   - the tracked window is still used when choosing alpha_peak for the
 %     non-reference curves, so plots keep the full curves while the metric
@@ -1506,7 +1506,7 @@ function saveValidationPhasePlots(nList, alphaGridsByN, tmokeCurvesByN, ...
         outDir, formats)
     if ~exist(outDir,'dir'), mkdir(outDir); end
 
-    fig = figure('Name','VALID dense tracked curves', ...
+    fig = figure('Name','SENSITIVITY FULL dense tracked curves', ...
                  'NumberTitle','off','Color','w','Visible','off');
     tiledlayout(fig, 1, 3, 'TileSpacing','compact', 'Padding','compact');
 
@@ -1518,7 +1518,7 @@ function saveValidationPhasePlots(nList, alphaGridsByN, tmokeCurvesByN, ...
     end
     xlabel('\alpha [deg]');
     ylabel('TMOKE');
-    title('VALID TMOKE curves');
+    title('SENSITIVITY FULL TMOKE curves');
     legend('Location','best');
 
     nexttile;
@@ -1546,7 +1546,7 @@ function saveFullPhasePlot(alphaFull, tmokeFull, transmissionPlusFull, transmiss
         baselineRefractiveIndex, outDir, formats)
     if ~exist(outDir,'dir'), mkdir(outDir); end
 
-    fig = figure('Name','FULL baseline curve', ...
+    fig = figure('Name','TMOKE FULL baseline curve', ...
                  'NumberTitle','off','Color','w','Visible','off');
     yyaxis left;
     plot(alphaFull, tmokeFull, '-', 'LineWidth', 1.2);
@@ -1557,7 +1557,7 @@ function saveFullPhasePlot(alphaFull, tmokeFull, transmissionPlusFull, transmiss
     plot(alphaFull, transmissionMinusFull, ':', 'LineWidth', 1.0);
     ylabel('Transmission');
     xlabel('\alpha [deg]');
-    title(sprintf('FULL baseline curve at n=%.3f', baselineRefractiveIndex));
+    title(sprintf('TMOKE FULL baseline curve at n=%.3f', baselineRefractiveIndex));
     legend({'TMOKE','T^+','T^-'}, 'Location','best');
     grid on;
 

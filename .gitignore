@@ -1,0 +1,10 @@
+*.pdf
+*.md
+*.bib
+*.sty
+*.ldf
+*.bst
+*.aux
+*.log
+*.html
+*.tex

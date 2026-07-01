@@ -18,7 +18,7 @@
 clear; clc; format long;
 
 %% --------------------------- Config --------------------------------
-projectRootDir     = 'C:\Users\gabri\Documents\projetoIC';
+projectRootDir     = 'D:\Gabriel Pivoto\projetoIC';
 checkpointFilePath = fullfile(projectRootDir, 'checkpoints', ...
                               'tmoke_sens_4d_sem_ceyig_checkpoint.mat');
 

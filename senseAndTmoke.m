@@ -52,8 +52,8 @@ import com.comsol.model.*;               % Import COMSOL model classes
 import com.comsol.model.util.*;          % Import COMSOL utility helpers
 
 %% --------------------------- Paths/Project -------------------------
-projectRootDir  = 'C:\Users\gabri\Documents\projetoIC';       % Root folder that holds the COMSOL project and outputs
-comsolModelFile = fullfile(projectRootDir,'usandoMatlab.mph');          % COMSOL model file to open
+projectRootDir  = 'D:\Gabriel Pivoto\projetoIC';       % Root folder that holds the COMSOL project and outputs
+comsolModelFile = fullfile(projectRootDir,'modelosimplificado.mph');          % COMSOL model file to open
 addpath(genpath(projectRootDir));                                       % Expose all helper scripts in the project to MATLAB
 
 %% ------------------------ Run budget (optional) ---------------------

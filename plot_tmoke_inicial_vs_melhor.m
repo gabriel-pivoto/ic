@@ -19,8 +19,8 @@ import com.comsol.model.*;
 import com.comsol.model.util.*;
 
 %% --------------------------- Config --------------------------------
-projectRootDir  = 'C:\Users\gabri\Documents\projetoIC';
-comsolModelFile = fullfile(projectRootDir,'usandoMatlab.mph');
+projectRootDir  = 'D:\Gabriel Pivoto\projetoIC';
+comsolModelFile = fullfile(projectRootDir,'modelosimplificado.mph');
 
 % Best geometry saved by extrair_melhor_dimensao.m (path from your run):
 bestMatPath = 'C:\Users\NanoPhotonicsGroup\.comsol\v64\llmatlab\melhor_dimensao.mat';
