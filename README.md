@@ -3,6 +3,32 @@
 
 ---
 
+## Estrutura do repositório
+
+```
+ic/
+├── README.md
+├── src/                    # scripts MATLAB
+│   ├── senseAndTmoke.m             # busca 5D (com CeYIG)
+│   ├── senseAndTmoke_semCeyig.m    # busca 4D (sem CeYIG)
+│   ├── tmoke.m                     # cálculo de TMOKE
+│   ├── sensibilidade.m             # cálculo de sensibilidade
+│   ├── usandoMatlab2.m             # controle do modelo COMSOL
+│   ├── extrair_melhor_dimensao.m   # extrai melhor geometria do checkpoint
+│   └── plot_tmoke_inicial_vs_melhor.m
+├── docs/                   # documentação e fluxogramas
+│   ├── fluxograma.md
+│   ├── senseAndTmoke_README.md
+│   └── *.html
+└── manuscript/             # artigo (LaTeX, PDF, bibliografia)
+    ├── MANUSCRIPT.*
+    ├── references.bib
+    ├── *.sty *.ldf *.bst           # estilos do periódico
+    └── refs/                       # PDFs de referência (01, 02, 03)
+```
+
+---
+
 ## 1. Objetivo do script
 
 Este script executa uma **busca hierárquica em 5 dimensões geométricas** para encontrar a geometria que melhor equilibra dois objetivos:
