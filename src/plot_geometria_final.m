@@ -49,13 +49,13 @@ stageUsed = resultsTable.Properties.UserData;   % stage label stashed below
 switch lower(whichBest)
     case 'tradeoff'
         best = selectTopK_tradeoff(resultsTable, 1, 'maxAbsTMOKE_base', 'S_est_deg_per_RIU');
-        bestLabel = 'melhor trade-off';
+        bestLabel = 'best trade-off';
     case 'tmoke'
         best = selectTopK_single(resultsTable, 1, 'maxAbsTMOKE_base');
-        bestLabel = 'melhor |TMOKE|';
+        bestLabel = 'best |TMOKE|';
     case 'sens'
         best = selectTopK_single_abs(resultsTable, 1, 'S_est_deg_per_RIU');
-        bestLabel = 'melhor sensibilidade';
+        bestLabel = 'best sensitivity';
     otherwise
         error('whichBest must be tradeoff | tmoke | sens');
 end
@@ -123,7 +123,7 @@ axis(ax,'equal');
 xlim(ax,[xLeft-0.10*Ldom, xRight+0.05*Ldom]);
 ylim(ax,[-0.44*hSi, airTop]);
 xlabel(ax,'x [nm]'); ylabel(ax,'y [nm]');
-title(ax, {sprintf('Geometria final (%s) \\alpha_{peak} = %.3f\\circ', bestLabel, alpha), ...
+title(ax, {sprintf('Final geometry (%s) \\alpha_{peak} = %.3f\\circ', bestLabel, alpha), ...
     sprintf('|TMOKE| = %.5f   |   S = %+.4f deg/RIU', tmk, Sens)}, ...
     'FontWeight','bold');
 set(ax,'Layer','top','FontSize',10);
