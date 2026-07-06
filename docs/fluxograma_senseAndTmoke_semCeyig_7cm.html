@@ -30,8 +30,7 @@ flowchart TD
     B --> C["FINE<br/><small>refine the best seeds</small>"]:::stage
     C --> D["SUPER<br/><small>final geometry refinement</small>"]:::stage
     D --> E["SENSITIVITY FULL<br/><small>dense sweep over n &rarr; sensitivity S</small>"]:::out
-    E --> F["TMOKE FULL<br/><small>reference curve at n = 1.33</small>"]:::out
-    F --> G["EXPORT<br/><small>tables and figures</small>"]:::out
+    E --> G["EXPORT<br/><small>tables and figures</small>"]:::out
     G --> H([End]):::term
 
     classDef term  fill:#d9d9d9,stroke:#000,color:#000,stroke-width:1px;
