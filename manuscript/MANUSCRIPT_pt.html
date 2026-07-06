@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Algoritmo de Otimização para Realce do TMOKE em Nanogratings Magnetofotônicos</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\(', '\\)']], displayMath: [['$$', '$$']] }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root { --accent: #1a4f8b; --muted: #5a6675; --rule: #d9dee5; }
+  body {
+    font-family: "Georgia", "Times New Roman", serif;
+    max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem;
+    color: #1c2127; line-height: 1.65; background: #fff;
+  }
+  h1 { font-size: 1.7rem; line-height: 1.3; color: var(--accent); margin-bottom: 0.4rem; }
+  h2 { font-size: 1.3rem; color: var(--accent); margin-top: 2.4rem;
+       border-bottom: 2px solid var(--rule); padding-bottom: 0.3rem; }
+  .authors { font-weight: bold; margin: 0.6rem 0 0.2rem; }
+  .affil, .email { color: var(--muted); font-size: 0.95rem; font-style: italic; }
+  .email { margin-bottom: 1.4rem; }
+  .struct-note, blockquote {
+    background: #f4f7fa; border-left: 4px solid var(--accent);
+    padding: 0.7rem 1rem; margin: 1.2rem 0; font-size: 0.92rem; color: var(--muted);
+  }
+  blockquote p { margin: 0; }
+  .move {
+    display: block; margin-top: 1.3rem; font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 0.9rem; font-weight: 700; color: var(--accent);
+  }
+  .move .step { font-weight: 400; font-style: italic; color: var(--muted); }
+  .move + p { margin-top: 0.35rem; }
+  .pending { color: #9aa3ad; font-style: italic; font-family: "Segoe UI", Arial, sans-serif;
+             font-size: 0.88rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.95rem; }
+  th, td { border: 1px solid var(--rule); padding: 0.5rem 0.7rem; text-align: left; }
+  th { background: #eef2f6; }
+  hr { border: none; border-top: 1px solid var(--rule); margin: 2rem 0; }
+  code { background: #eef2f6; padding: 0.1rem 0.35rem; border-radius: 3px;
+         font-family: "Consolas", monospace; font-size: 0.88em; }
+  .funding, .refs { font-size: 0.85rem; color: var(--muted); }
+  .refs p { margin: 0.5rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Algoritmo de Otimização para Realce do TMOKE em Nanogratings Magnetofotônicos</h1>
+
+<p class="authors">Gabriel de Souza Pivoto, Autor Dois, J. R. Mejía-Salazar e William O. F. Carvalho*</p>
+<p class="affil">Laboratório de Eletromagnetismo e Superfícies Inteligentes (EMIS Lab) — Instituto Nacional de Telecomunicações (Inatel), Santa Rita do Sapucaí, MG, 37536-001, Brasil</p>
+<p class="email">*william.orivaldo@inatel.br</p>
+
+<div class="struct-note">
+  <strong>Nota sobre a estrutura.</strong> Os rótulos <code>C#</code> (move) / <code>S#</code> (step)
+  foram mantidos do template como guia de escrita. Cada rótulo encabeça o texto que cumpre aquele
+  movimento/passo retórico, de modo que a estrutura do manuscrito permaneça explícita e fácil de
+  acompanhar. Os nomes dos conceitos técnicos são mantidos em inglês.
+</div>
+
+<hr>
+
+<h2>Resumo</h2>
+<blockquote><p><em>Deve ser limitado a no máximo 35 palavras. Um resumo explícito do artigo,
+declarando o problema, os métodos usados e os principais resultados e conclusões.</em></p></blockquote>
+
+<span class="move">C3 — Propósito <span class="step">· S2 Especificar o propósito</span></span>
+<p>Otimizamos a geometria quadridimensional de um nanograting magnetofotônico de ouro sobre sílica
+para maximizar conjuntamente o transverse magneto-optical Kerr effect (TMOKE) em transmissão e sua
+sensibilidade refratométrica angular.</p>
+
+<span class="move">C4 — Métodos e Materiais <span class="step">· S2 Descrever métodos e materiais</span></span>
+<p>Um modelo eletromagnético de elementos finitos é conduzido por uma busca hierárquica do grosseiro
+ao fino que automatiza o fluxo manual de varrer-analisar-resemear do COMSOL, classificando geometrias
+por um escore combinado de TMOKE/sensibilidade.</p>
+
+<span class="move">C5 — Resultados Principais <span class="step">· S2 Sintetizar os resultados</span></span>
+<p class="pending">[Resultados ainda não disponíveis.]</p>
+
+<span class="move">C6 — Conclusão <span class="step">· S2 Sintetizar contribuições/importância da pesquisa</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<hr>
+
+<h2>1. Introdução</h2>
+
+<span class="move">C1 — Contexto <span class="step">· S3 Argumentar sobre a relevância do tema</span></span>
+<p>Os efeitos magneto-ópticos (MO) em sistemas fotônicos nanoestruturados tornaram-se uma plataforma
+útil para o controle ativo da luz e o sensoriamento sem marcadores (<em>label-free sensing</em>).
+Entre eles, o transverse magneto-optical Kerr effect (TMOKE) é especialmente atraente. Ele mede a
+variação relativa na intensidade da luz <em>p</em>-polarizada (transverse-magnetic, TM) ao se inverter
+uma magnetização transversal <strong>M</strong>; assim, o sinal é lido como intensidade e não exige
+análise de polarização [2].</p>
+
+<span class="move">C2 — Revisão <span class="step">· S4 Progresso na área</span></span>
+<p>Nanoestruturar um metal para excitar surface plasmon resonances (SPRs) realça fortemente o TMOKE e
+produz ressonâncias estreitas [2]. Acoplar essas ressonâncias de TMOKE estreitas e
+realçadas por plasmons à alta sensibilidade das SPRs ao índice de refração do meio circundante é a
+base do magnetoplasmonic biosensing, no qual essa combinação melhora a resolução de detecção [2].
+Gratings metálicos periódicos são uma forma prática de alcançar tais ressonâncias a partir do campo
+distante: um grating unidimensional acopla a luz incidente a modos guiados e de superfície por meio
+de suas ordens de difração, e o momento do grating <em>G</em> = 2π/<em>a</em> (período <em>a</em>)
+estabelece a condição de acoplamento <em>k</em><sub>x</sub> = β sen θ + <em>mG</em> [1].</p>
+
+<span class="move">C3 — Tipos de Lacuna <span class="step">· S2 Limitações de trabalhos anteriores</span></span>
+<p>Sensores magnetoplasmônicos de TMOKE do estado da arte já reportam desempenho expressivo:
+sensibilidades angulares de ≈190° RIU⁻¹ e figuras de mérito (FOM) da ordem de 10³ em arquiteturas de
+metal-grating/MO-metal interrogadas pelo deslocamento angular de ressonâncias de TMOKE tipo Fano
+[3]; FOM da ordem de 10³ RIU⁻¹ em sensores de SPR magneto-óptico que combinam magnetophotonic
+crystals com hyperbolic metamaterials [4]; e amplitudes de TMOKE quase máximas (≈1,978, próximas do
+limite teórico de 2) usando quasi-bound states in the continuum (quasi-BIC) em estruturas de
+grating-waveguide [5], entre outros esquemas de acoplamento SPR/guided-mode-resonance [6]. Ainda
+assim, duas limitações permanecem. Primeiro, esses projetos costumam otimizar um <em>único</em>
+objetivo (a amplitude do TMOKE ou uma FOM espectral/angular) ajustando um ou dois parâmetros, em vez
+de otimizar <em>conjuntamente</em> a amplitude do TMOKE e a sensibilidade angular sobre uma geometria
+multiparamétrica; a geometria que maximiza |TMOKE| nem sempre é a que maximiza a sensibilidade
+refratométrica. Segundo, muitas plataformas de alto desempenho dependem de multicamadas, MO garnets
+ou metasuperfícies de BIC exigentes em fabricação, ao passo que uma varredura exaustiva por onda
+completa do espaço geométrico é computacionalmente cara, o que motiva estratégias de otimização mais
+eficientes [7]. Falta, assim, uma estratégia de projeto que equilibre explicitamente as duas figuras
+de mérito em um grating simples de ouro sobre sílica.</p>
+
+<span class="move">C4 — Propósito <span class="step">· S1B Apresentar uma nova abordagem/método/técnica · S1E Propor uma abordagem alternativa</span></span>
+<p>Apresentamos um algoritmo de otimização hierárquica que automatiza um fluxo normalmente feito à mão.
+Na prática usual, o usuário roda uma varredura de parâmetros no COMSOL Multiphysics, olha os
+resultados e lança uma nova varredura em torno dos melhores pontos. Nosso algoritmo fecha esse laço
+sozinho. Ele conduz um modelo de onda completa (FEM) de um nanograting magnetofotônico de ouro sobre
+sílica, em transmissão, varre a geometria quadridimensional, pontua cada
+ponto pela amplitude do TMOKE e pela sensibilidade angular, e resemeia varreduras mais finas em torno
+dos melhores candidatos. As duas figuras de mérito são equilibradas explicitamente nesse escore.</p>
+
+<span class="move">C5 — Métodos e Materiais <span class="step">· S2 Descrever métodos e materiais</span></span>
+<p>O algoritmo varre o período do grating, a largura do dente, a altura da sílica e a altura do
+ouro; para cada geometria candidata calcula tanto a amplitude de pico do TMOKE quanto a
+sensibilidade angular, e refina progressivamente a busca (grosseiro → fino → superfino) em torno das
+regiões mais promissoras.</p>
+
+<span class="move">C6 — Resultados Principais <span class="step">· S2 Comentários sobre os resultados</span></span>
+<p class="pending">[Comentários sobre as geometrias otimizadas e seu desempenho serão adicionados quando houver resultados.]</p>
+
+<hr>
+
+<h2>2. Métodos e Materiais</h2>
+
+<span class="move">C1 — Métodos e Materiais <span class="step">· S3 Detalhar informações sobre os materiais</span></span>
+<p>O dispositivo otimizado é um nanograting magnetofotônico unidimensional composto por um grating de
+dentes de ouro sobre uma camada de sílica (SiO₂), imersos em um meio dielétrico de índice de refração
+<em>n</em> que representa o analito. A geometria é totalmente descrita por quatro parâmetros:</p>
+
+<table>
+  <thead><tr><th>Símbolo</th><th>Significado</th><th>Parâmetro no script</th></tr></thead>
+  <tbody>
+    <tr><td><em>L</em><sub>domain</sub></td><td>Período do grating</td><td><code>L_domain</code></td></tr>
+    <tr><td><em>l</em><sub>dente</sub></td><td>Largura do dente (crista)</td><td><code>l_dente</code></td></tr>
+    <tr><td><em>h</em><sub>sílica</sub></td><td>Altura da camada de sílica (SiO₂)</td><td><code>h_si</code></td></tr>
+    <tr><td><em>h</em><sub>Au</sub></td><td>Altura da camada de ouro</td><td><code>h_au</code></td></tr>
+  </tbody>
+</table>
+
+<p>Uma magnetização transversal é aplicada à estrutura, e seu sinal <em>m</em> = ±1 é a variável de
+controle usada para avaliar o contraste magneto-óptico. Para uma onda plana <em>p</em>-polarizada
+(TM) incidente sob ângulo α, o modelo FEM calcula a transmitância para os dois estados opostos de
+magnetização, <em>T</em><sub>+</sub>(α) e <em>T</em><sub>−</sub>(α). Seguindo a definição padrão do
+TMOKE, isto é, a diferença normalizada das intensidades para magnetização invertida [2], o TMOKE em
+transmissão aqui usado é</p>
+
+$$ \mathrm{TMOKE}(\alpha) = 2\,\frac{T_{+}(\alpha) - T_{-}(\alpha)}{T_{+}(\alpha) + T_{-}(\alpha)}. $$
+
+<p>Para cada geometria, o espectro angular é varrido e a figura de mérito do TMOKE é o valor absoluto
+de pico, |TMOKE|<sub>máx</sub>, localizado no ângulo de ressonância α<sub>pico</sub>. Ressonâncias
+estreitas de TMOKE desse tipo são as exploradas para sensing e metrologia [2].</p>
+
+<span class="move">C2 — Métodos e Procedimentos <span class="step">· S2 Detalhar os procedimentos usados para executar os métodos</span></span>
+<p>O desempenho refratométrico é quantificado pela sensibilidade angular</p>
+
+$$ S = \frac{d\,\alpha_{\text{pico}}}{dn}\quad[\text{graus/RIU}], $$
+
+<p>o deslocamento angular de uma dada ressonância por unidade de variação do índice de refração do
+meio circundante. Para medir <em>S</em> de forma consistente, o algoritmo rastreia a <em>mesma</em>
+ressonância ao longo de um conjunto de índices de refração, <em>n</em> ∈ {1,30; 1,33; 1,36}, que
+abrangem a faixa aquosa relevante para biosensing, com <em>n</em> = 1,33 como referência:</p>
+
+<ol>
+  <li>A curva de referência (<em>n</em> = 1,33) é resolvida sobre toda a janela angular e seu pico
+  global de TMOKE é localizado, fixando a ressonância-alvo e seu sinal.</li>
+  <li>Para os demais índices de refração, a busca é restrita a uma janela de ±20° em torno do pico de
+  referência (limitada aos limites angulares globais), e o pico da mesma ressonância é tomado como
+  aquele de mesmo sinal e maior |TMOKE| dentro da janela. Isso impede que a métrica salte para uma
+  ressonância diferente quando o índice muda.</li>
+  <li>Um ajuste linear de α<sub>pico</sub>(<em>n</em>) é realizado e sua inclinação é tomada como a
+  sensibilidade <em>S</em>.</li>
+</ol>
+
+<p>Todo o procedimento é implementado em MATLAB e conduz o modelo FEM por meio da interface COMSOL
+LiveLink for MATLAB, que define programaticamente os parâmetros geométricos, executa o solucionador e
+lê de volta as transmitâncias. A geometria quadridimensional é explorada por uma busca em grade do
+grosseiro ao fino que automatiza a prática manual de analisar-e-resemear: cada etapa avalia uma
+varredura, classifica os pontos e resemeia a varredura seguinte, mais fina, em torno dos candidatos
+mais bem classificados. Cada ponto
+avaliado requer duas execuções de FEM por índice de refração (<em>m</em> = ±1), isto é, 2 × 3 = 6
+execuções por avaliação de sensibilidade; a contagem de execuções planejadas e o tempo de execução
+são monitorados e limitados por um orçamento fixo de execuções. As etapas são:</p>
+
+<ul>
+  <li><strong>COARSE.</strong> Uma grade ampla sobre (<em>L</em><sub>domain</sub>,
+  <em>l</em><sub>dente</sub>, <em>h</em><sub>sílica</sub>, <em>h</em><sub>Au</sub>) é varrida com um passo
+  angular grosseiro, calculando |TMOKE|<sub>máx</sub> no índice de referência e a sensibilidade
+  rastreada para cada ponto.</li>
+  <li><strong>FINE.</strong> As melhores sementes da etapa grosseira são refinadas em uma grade
+  geométrica mais densa e uma janela angular mais estreita, com passo angular mais fino.</li>
+  <li><strong>SUPER.</strong> A varredura final e mais fina em torno das melhores sementes finas, com
+  os passos geométrico e angular mais estreitos. É o último refinamento, e o projeto otimizado é
+  obtido diretamente de seus resultados.</li>
+</ul>
+
+<p>Em cada etapa, os candidatos são classificados por um escore combinado de compromisso
+(<em>trade-off</em>), construído a partir do ranking de |TMOKE|<sub>máx</sub> e do ranking de
+|<em>S</em>| (escore menor = melhor compromisso). Nas etapas COARSE e FINE essa classificação serve
+apenas para selecionar as TOP-K sementes que são resemeadas na varredura seguinte, mais fina. A etapa
+SUPER é a última varredura: de seus resultados o algoritmo toma a melhor geometria de compromisso
+como o projeto otimizado (o melhor ponto encontrado), e também reporta a melhor geometria apenas em
+TMOKE e a melhor apenas em sensibilidade como referência. Duas etapas
+de verificação então encerram o fluxo: a <strong>VALID</strong> recalcula a sensibilidade do melhor
+candidato de compromisso na mesma lista de índices com passo angular muito mais denso, e a
+<strong>FULL</strong> calcula uma curva final de TMOKE em alta resolução no índice de referência. A
+busca é salva em checkpoints periodicamente, de modo que execuções longas possam ser retomadas.</p>
+
+<span class="move"><span class="step">S3 Explicar os procedimentos usados para analisar os dados</span></span>
+<p>Para cada candidato, o algoritmo registra os parâmetros geométricos, a amplitude de pico do TMOKE
+e sua posição angular no índice de referência, o ângulo de ressonância no maior índice e a inclinação
+ajustada da sensibilidade, exportando todas as tabelas para CSV/XLSX para análise posterior.</p>
+
+<span class="move">C4 — Análise de Dados <span class="step">· S1 Procedimento de análise de dados</span></span>
+<p>A sensibilidade é obtida a partir da inclinação do ajuste linear α<sub>pico</sub>(<em>n</em>).
+Picos de ressonância situados nas bordas da janela angular varrida são sinalizados, pois um pico de
+borda pode indicar uma ressonância capturada de forma incompleta. A classificação combinada é então
+aplicada às tabelas resultantes para selecionar os projetos reportados.</p>
+
+<hr>
+
+<h2>3. Resultados e Discussão</h2>
+
+<span class="move">C1 — Resultados Principais <span class="step">· S1 Apresentar resultados · S2 Discutir resultados</span></span>
+<p class="pending">[Resultados ainda não disponíveis; a ser completado após a análise das execuções de otimização.]</p>
+
+<span class="move">C2 — Retomar o Contexto <span class="step">· S1 Argumentar sobre a relevância do tema na área de pesquisa</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<span class="move">C4 — Apresentar Conclusões <span class="step">· S2 Discutir implicações da pesquisa</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<hr>
+
+<h2>4. Conclusões</h2>
+
+<span class="move">C1 — Contexto <span class="step">· S1 Familiarizar termos, objetos ou processos</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<span class="move">C2 — Propósito <span class="step">· S1 Indicar o propósito principal</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<span class="move">C3 — Métodos e Materiais <span class="step">· S1 Descrever métodos e materiais</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<span class="move">C4 — Resultados Principais <span class="step">· S1 Descrever resultados</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<span class="move">C5 — Conclusão <span class="step">· S6 Discutir contribuições/importância da pesquisa</span></span>
+<p class="pending">[A ser escrito após os resultados.]</p>
+
+<hr>
+
+<h2>Figuras</h2>
+<blockquote><p>Em geral, não mais que três figuras devem ser incluídas. Posicione as figuras o mais
+próximo possível de onde são mencionadas no texto. Nenhuma parte de uma figura deve ultrapassar a
+largura do texto, e o texto não deve contornar as figuras. Forneça permissão/atribuição para
+quaisquer imagens registradas ou com direitos autorais. Para atender aos requisitos de
+acessibilidade, não dependa apenas da cor para identificar elementos das figuras; use formas ou
+outros recursos além da cor (linhas tracejadas/pontilhadas, formatos distintos de pontos de dados,
+rótulos de texto, numeração etc.).</p></blockquote>
+
+<hr>
+
+<h2>Informações de Financiamento</h2>
+<p class="funding">Este trabalho foi financiado pelos seguintes projetos de pesquisa: Projeto Brasil
+6G com apoio da RNP/MCTI (Concessão 01245.010604/2020-14), Projeto xGMobile código
+XGM-AFCCT-2024-7-9-1 com recursos da EMBRAPII/MCTI (Concessão 052/2023 PPI IoT/Manufatura 4.0),
+FAPEMIG (PPE-00124-23; APQ-04523-23; APQ-05305-23) e Centro de Competência em Redes 5G e 6G Ref.
+Finep nº 1060/2 contrato nº 0-1-25-0883-00. Este trabalho também contou com o apoio de bolsas de
+iniciação científica da Finatel.</p>
+
+<hr>
+
+<h2>Referências</h2>
+<div class="refs">
+<p>[1] N. Maccaferri, T. Isoniemi, M. Hinczewski, M. Iarossi, G. Strangi e F. De Angelis, "Designer
+Bloch plasmon polariton dispersion in grating-coupled hyperbolic metamaterials," <em>APL Photonics</em>
+<strong>5</strong>, 076109 (2020). <a href="https://doi.org/10.1063/5.0008687">https://doi.org/10.1063/5.0008687</a></p>
+<p>[2] B. F. Díaz-Valencia, E. Moncada-Villa, F. Reyes Gómez, N. Porras-Montenegro e
+J. R. Mejía-Salazar, "Bulk Plasmon Polariton Modes in Hyperbolic Metamaterials for Giant Enhancement
+of the Transverse Magneto-Optical Kerr Effect," <em>Molecules</em> <strong>27</strong>, 5312 (2022).
+<a href="https://doi.org/10.3390/molecules27165312">https://doi.org/10.3390/molecules27165312</a></p>
+<p>[3] B. F. Díaz-Valencia, J. R. Mejía-Salazar, O. N. Oliveira Jr., N. Porras-Montenegro e
+P. Albella, "Enhanced Transverse Magneto-Optical Kerr Effect in Magnetoplasmonic Crystals for the
+Design of Highly Sensitive Plasmonic (Bio)sensing Platforms," <em>ACS Omega</em> <strong>2</strong>,
+7682–7685 (2017). <a href="https://doi.org/10.1021/acsomega.7b01458">https://doi.org/10.1021/acsomega.7b01458</a></p>
+<p>[4] S. Hu, C. Shen, K. Chen, Y. Chen, W. Xiao, G.-S. Liu, L. Chen, G. Zhou, Z. Chen, D. Cao,
+Y. Chen e Y. Luo, "Ultra-high FOM magneto-optical surface plasmon resonance sensor based on
+magnetophotonic crystals and hyperbolic metamaterials," <em>Measurement</em> <strong>252</strong>,
+117396 (2025). <a href="https://doi.org/10.1016/j.measurement.2025.117396">https://doi.org/10.1016/j.measurement.2025.117396</a></p>
+<p>[5] Q. Tang, D. Zhang, S. Xiao, M. Qin, J. He, T. Liu, Q. Liao e T. Yu, "Giant enhancement of the
+transverse magneto-optical Kerr effect in etchless bismuth-substituted yttrium iron garnet empowered
+by quasi-bound states in the continuum," <em>Applied Physics Letters</em> <strong>126</strong>,
+171701 (2025). <a href="https://doi.org/10.1063/5.0260200">https://doi.org/10.1063/5.0260200</a></p>
+<p>[6] F. Lei, S. Wang, L. Wu, K. Wen e Y. Qin, "Coupling of SPR and guided mode resonances for
+TMOKE enhancement and its application in sensing," <em>Optics Communications</em> <strong>592</strong>,
+132278 (2025). <a href="https://doi.org/10.1016/j.optcom.2025.132278">https://doi.org/10.1016/j.optcom.2025.132278</a></p>
+<p>[7] J. Kim, J.-Y. Kim, J. Kim, Y. Hyeong, B. Neseli, J.-B. You, J. Shim, J. Shin, H.-H. Park e
+H. Kurt, "Inverse design of nanophotonic devices enabled by optimization algorithms and deep
+learning: recent achievements and future prospects," <em>Nanophotonics</em> <strong>14</strong>,
+121–151 (2025). <a href="https://doi.org/10.1515/nanoph-2024-0536">https://doi.org/10.1515/nanoph-2024-0536</a></p>
+</div>
+
+</body>
+</html>

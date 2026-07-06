@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flowchart (7 cm) — senseAndTmoke_semCeyig.m</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body{
+    margin:0; font-family:"Times New Roman",Georgia,serif;
+    background:#ffffff; color:#000; display:flex; flex-direction:column;
+    align-items:center; padding:24px 12px;
+  }
+  p.sub{ margin:0 0 14px; font-size:11px; text-align:center }
+  /* Final figure width: 7 cm */
+  .diagram{ width:7cm; background:#fff; }
+  .mermaid{ text-align:center }
+  .mermaid .nodeLabel{ font-size:9px !important; line-height:1.1 !important; }
+  .mermaid .nodeLabel small{ font-size:7.5px; }
+</style>
+</head>
+<body>
+  <p class="sub">Flowchart — <code>senseAndTmoke_semCeyig.m</code></p>
+
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TD
+    A([Start]):::term
+    A --> B["COARSE<br/><small>wide 4D geometry sweep</small>"]:::stage
+    B --> C["FINE<br/><small>refine the best seeds</small>"]:::stage
+    C --> D["SUPER<br/><small>final geometry refinement</small>"]:::stage
+    D --> E["SENSITIVITY FULL<br/><small>dense sweep over n &rarr; sensitivity S</small>"]:::out
+    E --> F["TMOKE FULL<br/><small>reference curve at n = 1.33</small>"]:::out
+    F --> G["EXPORT<br/><small>tables and figures</small>"]:::out
+    G --> H([End]):::term
+
+    classDef term  fill:#d9d9d9,stroke:#000,color:#000,stroke-width:1px;
+    classDef stage fill:#fff,stroke:#000,color:#000,stroke-width:1px;
+    classDef out   fill:#fff,stroke:#000,color:#000,stroke-width:1px;
+    </pre>
+  </div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad:true, theme:'neutral',
+    themeVariables:{ lineColor:'#000', fontFamily:'Times New Roman, serif', fontSize:'9px' },
+    flowchart:{ curve:'linear', nodeSpacing:18, rankSpacing:18, padding:4, useMaxWidth:true }
+  });
+</script>
+</body>
+</html>
