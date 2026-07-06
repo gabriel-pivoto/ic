@@ -6,7 +6,7 @@
 %   S = d(alpha_peak)/dn [deg/RIU].
 %
 % This is the sensitivity-only counterpart of senseAndTmoke_semCeyig.m:
-% it keeps the same COARSE -> FINE -> SUPER -> SENSITIVITY FULL pipeline,
+% it keeps the same Stage 1 -> Stage 2 -> Stage 3 -> Stage 4 pipeline,
 % but every seed-selection step ranks candidates purely by |S|. There is
 % no |TMOKE| optimization objective, no trade-off score, and no separate
 % TMOKE-only candidate or final baseline-TMOKE export stage.
@@ -18,7 +18,7 @@
 %   means to obtain S, not a competing optimization target: |TMOKE|_max is
 %   kept only as diagnostic metadata in the result tables.
 %
-% For every geometry point (COARSE/FINE/SUPER) we compute:
+% For every geometry point (Stage 1/Stage 2/Stage 3) we compute:
 %   - Sensitivity est: track the same TMOKE resonance across n = [1.30, 1.33, 1.36]
 %                      using n = 1.33 as the reference curve:
 %                        1) find the global TMOKE peak at n = 1.33
@@ -27,24 +27,24 @@
 %                           alpha sweep limits)
 %                        3) fit alpha_peak vs n and use the slope as S.
 %
-% In the SENSITIVITY FULL stage, on the best candidate, we recompute the same tracked
+% In Stage 4, on the best candidate, we recompute the same tracked
 % sensitivity with a dense alpha step:
 %   - validationRefractiveIndexList = [1.30 1.33 1.36]
 %   - sensitivityDense = slope of alpha_peak vs n (deg/RIU) from linear fit.
 %
 % Candidate selection:
-%   In each stage (COARSE/FINE/SUPER) candidates are ranked only by
+%   In each stage (Stage 1/Stage 2/Stage 3) candidates are ranked only by
 %   |sensitivityEstimateFast| (descending). This yields bestSensitivityCandidate.
 %
 % High-level flow:
 %   Start -> Load .mph -> (optional resume from checkpoint)
-%     -> COARSE (sweep wide grid, compute sensitivityEstimateFast)
+%     -> Stage 1 (sweep wide grid, compute sensitivityEstimateFast)
 %     -> pick TOP-K seeds (by |S|)
-%     -> FINE   (refine geometry + alpha window, recompute S)
+%     -> Stage 2 (refine geometry + alpha window, recompute S)
 %     -> pick TOP-K seeds (by |S|)
-%     -> SUPER  (final refinement, recompute S)
+%     -> Stage 3 (final refinement, recompute S)
 %     -> choose bestSensitivityCandidate
-%     -> SENSITIVITY FULL (dense curves on bestSensitivityCandidate to compute sensitivityDense)
+%     -> Stage 4 (dense curves on bestSensitivityCandidate to compute sensitivityDense)
 %     -> SAVE FIGURES
 %     -> End
 % =====================================================================
@@ -124,16 +124,16 @@ trackingReferenceRefractiveIndex = 1.33;
 trackingHalfWindowDeg = 20;
 baselineRefractiveIndex = trackingReferenceRefractiveIndex;
 
-% SENSITIVITY FULL uses the same tracked-n list, but with a much denser alpha step.
+% Stage 4 uses the same tracked-n list, but with a much denser alpha step.
 validationRefractiveIndexList = [1.30, 1.33, 1.36];
 
 
-%% ------------------------ COARSE grids (exact) ----------------------
+%% ------------------------ Stage 1 grids (exact) ----------------------
 domainPeriodGridNm = 800:50:850;         % 2
 toothWidthGridNm  = 500:50:600;         % 3
 siliconHeightGridNm     = [220, 240, 260];    % 3
 goldHeightGridNm     = 20:10:60;           % 5
-% COARSE points = 90
+% Stage 1 points = 90
 
 %% ---------------------- Alpha ranges/steps --------------------------
 alphaCoarseRange = [0, 1.0, 89];  % Coarse sweep: start [deg], step [deg], stop [deg]
@@ -159,11 +159,11 @@ superToothWidthDelta   = 4;   superToothWidthStep   = 2;
 superSiliconHeightDelta= 2;   superSiliconHeightStep= 1;
 
 %% ------------------ Alpha windows (centered at last peak) ----------
-fineAlphaHalfSpan   = 5;     % Nominal alpha window half-span for FINE stage [deg]
-superAlphaHalfSpan  = 2;     % Nominal alpha window half-span for SUPER stage [deg]
+fineAlphaHalfSpan   = 5;     % Nominal alpha window half-span for Stage 2 [deg]
+superAlphaHalfSpan  = 2;     % Nominal alpha window half-span for Stage 3 [deg]
 
 % These windows are used only to relock the reference curve at n = 1.33 in
-% FINE/SUPER. Once the reference peak is found, the other n values are
+% Stage 2/Stage 3. Once the reference peak is found, the other n values are
 % searched in the tracked +/-20 deg window around that peak.
 fineAlphaHalfSpanSensitivity  = fineAlphaHalfSpan  + 1;   % +/-6 deg margin for sensitivity sweeps
 superAlphaHalfSpanSensitivity = superAlphaHalfSpan + 2;   % +/-4 deg margin for sensitivity sweeps
@@ -244,7 +244,7 @@ superTotalPoints    = topKFine * superPointsPerSeed;
 superTotalRuns   = runsPerSearchPoint * superTotalPoints;
 
 % Extra runs that always happen:
-% - SENSITIVITY FULL: 2 runs per validationRefractiveIndexList element (m = +/-1) => 2*len(validationRefractiveIndexList)
+% - Stage 4: 2 runs per validationRefractiveIndexList element (m = +/-1) => 2*len(validationRefractiveIndexList)
 % - snapshot: 2 runs (m = +/-1) at a fixed alpha in baselineRefractiveIndex
 extraRunsFixed = 2*numel(validationRefractiveIndexList) + (SAVE_SNAPSHOT*2);
 
@@ -252,14 +252,14 @@ globalRunTargetEstimate = coarseTotalRuns + fineTotalRunsEstimate + superTotalRu
 isTotalRunEstimateExact = false;
 
 fprintf('START\n');
-fprintf('  COARSE (exact):    %d runs\n', coarseTotalRuns);
-fprintf('  FINE   (estimate): %d runs (TOP-%d)\n', fineTotalRunsEstimate, topKCoarse);
-fprintf('  SUPER  (exact):    %d runs (TOP-%d)\n', superTotalRuns, topKFine);
+fprintf('  Stage 1 (exact):    %d runs\n', coarseTotalRuns);
+fprintf('  Stage 2 (estimate): %d runs (TOP-%d)\n', fineTotalRunsEstimate, topKCoarse);
+fprintf('  Stage 3 (exact):    %d runs (TOP-%d)\n', superTotalRuns, topKFine);
 fprintf('  EXTRAS (exact):    %d runs\n', extraRunsFixed);
 fprintf('  TOTAL  (estimate): %d runs\n\n', globalRunTargetEstimate);
 
 %% ==================================================================
-%                               COARSE
+%                               Stage 1
 % ==================================================================
 % Sweep the full coarse geometry grid. For each geometry point:
 %   1) Set geometry parameters.
@@ -273,40 +273,40 @@ fprintf('  TOTAL  (estimate): %d runs\n\n', globalRunTargetEstimate);
 coarseResultsTable = [];
 coarseSeedCandidates   = [];
 
-skipCoarseStage = resumeFromCheckpoint && any(strcmp(resumeStageTag, ["FINE","SUPER","SENSITIVITY FULL","FINAL"]));
+skipCoarseStage = resumeFromCheckpoint && any(strcmp(resumeStageTag, ["Stage 2","Stage 3","Stage 4","FINAL"]));
 if skipCoarseStage
-    % When resuming past COARSE, restore previous coarse results/seeds instead of recomputing.
+    % When resuming past Stage 1, restore previous coarse results/seeds instead of recomputing.
     if isfield(checkpointData.payload,'coarseResultsTable'), coarseResultsTable = checkpointData.payload.coarseResultsTable; end
     if isfield(checkpointData.payload,'coarseSeedCandidates'),   coarseSeedCandidates   = checkpointData.payload.coarseSeedCandidates;   end
     % Safety net: an older/partial checkpoint may lack the seeds. Rebuild them
-    % from coarseResultsTable so the FINE/SUPER run-count planning stays exact.
+    % from coarseResultsTable so the Stage 2/Stage 3 run-count planning stays exact.
     if (isempty(coarseSeedCandidates) || height(coarseSeedCandidates)==0) && ~isempty(coarseResultsTable)
         coarseSeedCandidates = selectTopK_single_abs(coarseResultsTable, topKCoarse, 'S_est_deg_per_RIU');
-        warning('SKIP COARSE: coarseSeedCandidates missing in checkpoint -> rebuilt from coarseResultsTable.');
+        warning('SKIP Stage 1: coarseSeedCandidates missing in checkpoint -> rebuilt from coarseResultsTable.');
     end
-    fprintf('SKIP COARSE -> restored coarseResultsTable (rows=%d), coarseSeedCandidates (rows=%d)\n', ...
+    fprintf('SKIP Stage 1 -> restored coarseResultsTable (rows=%d), coarseSeedCandidates (rows=%d)\n', ...
         size(coarseResultsTable,1), height(coarseSeedCandidates));
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(coarseResultsTable, 'COARSE', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(coarseResultsTable, 'Stage 1', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 else
-    fprintf('STAGE COARSE - EXACT: %d runs\n', coarseTotalRuns);  % Full coarse grid, no estimates here
+    fprintf('STAGE 1 - EXACT: %d runs\n', coarseTotalRuns);  % Full grid, no estimates here
     stageRunsStart = runsCompletedGlobal;
     stageTotalRuns = coarseTotalRuns;
     stageTimerStart = tic;
 
-    % Colunas:
+    % Columns:
     % [Ldom, Lden, hsi, hau,
     %  maxAbsTMOKE_base, alpha_peak_base, TMOKE_at_peak_base,
     %  alpha_peak_high, sensitivityEstimateFast]
     coarseRows = [];
     coarsePointIndex = 0;
 
-    if resumeFromCheckpoint && resumeStageTag=="COARSE"
+    if resumeFromCheckpoint && resumeStageTag=="Stage 1"
         runsCompletedGlobal = checkpointData.runsCompletedGlobal;
         if isfield(checkpointData.payload,'coarseRows'), coarseRows = checkpointData.payload.coarseRows; end
         coarsePointIndex = checkpointData.done_points;
-        fprintf('>>> COARSE resume: skipping %d points already computed.\n', coarsePointIndex);
+        fprintf('>>> Stage 1 resume: skipping %d points already computed.\n', coarsePointIndex);
     end
 
     for domainPeriodIdx = 1:numDomainPeriodPoints
@@ -319,7 +319,7 @@ else
                     setParamNm(model, PARAM_HAU, goldHeightGridNm(goldHeightIdx));
 
                         coarsePointIndex = coarsePointIndex + 1;
-                        if resumeFromCheckpoint && resumeStageTag=="COARSE" && coarsePointIndex <= checkpointData.done_points
+                        if resumeFromCheckpoint && resumeStageTag=="Stage 1" && coarsePointIndex <= checkpointData.done_points
                             continue;
                         end
 
@@ -353,12 +353,12 @@ else
                         tmokePeakIndexFastBase = find(abs(alphaGridFastBase - alphaAtPeakFastBase) < 1e-9, 1, 'first');
                         if ~isempty(tmokePeakIndexFastBase) && ...
                                 (tmokePeakIndexFastBase == 1 || tmokePeakIndexFastBase == numel(tmokeCurveFastBase))
-                            logline('WARN COARSE (n=%.2f) reference peak at alpha-edge (alpha*=%.3f in [%.3f, %.3f])\n', ...
+                            logline('WARN Stage 1 (n=%.2f) reference peak at alpha-edge (alpha*=%.3f in [%.3f, %.3f])\n', ...
                                 baselineRefractiveIndex, alphaAtPeakFastBase, alphaGridFastBase(1), alphaGridFastBase(end));
                         end
 
                         if PLOT_LIVE
-                            updateLivePlot('COARSE', ...
+                            updateLivePlot('Stage 1', ...
                                 domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
                                 goldHeightGridNm(goldHeightIdx), ...
                                 alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
@@ -380,7 +380,7 @@ else
                         [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
                         [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
 
-                        logline(['COARSE | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
+                        logline(['Stage 1 | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
                                  ' | |TM|=%.5f @ alpha=%.2f deg | sensitivityEstimateFast=%.4f deg/RIU' ...
                                  ' [Stage %5.1f%% | ETA %s | Global %s%% | ETA %s]\n'], ...
                             domainPeriodGridNm(domainPeriodIdx), toothWidthGridNm(toothWidthIdx), siliconHeightGridNm(siliconHeightIdx), ...
@@ -392,7 +392,7 @@ else
                         pointsSinceCheckpoint = pointsSinceCheckpoint + 1;
                         payload = struct('coarseRows',coarseRows);
                         pointsSinceCheckpoint = maybe_checkpoint( ...
-                            'COARSE', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                            'Stage 1', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
                             runsCompletedGlobal, pointsSinceCheckpoint, coarsePointIndex, payload, ...
                             [], [], [], []);
                 end
@@ -408,29 +408,29 @@ else
 % TOP-K selection ranked only by |sensitivityEstimateFast|
     coarseSeedCandidates = selectTopK_single_abs(coarseResultsTable, topKCoarse, 'S_est_deg_per_RIU');
 
-    save_checkpoint(checkpointFilePath, 'FINE', runsCompletedGlobal, 0, struct('coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates));
+    save_checkpoint(checkpointFilePath, 'Stage 2', runsCompletedGlobal, 0, struct('coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates));
     write_progress_xlsx(progressWorkbookPath, 'coarse', coarseResultsTable);
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(coarseResultsTable, 'COARSE', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(coarseResultsTable, 'Stage 1', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 end
 
 %% ==================================================================
-%                        FINE PLANNING (EXACT NOW)
+%                        Stage 2 PLANNING (EXACT NOW)
 % ------------------------------------------------------------------
-% Build exact FINE counts by clamping search windows around the coarse
-% seeds, so the run budget and ETA become exact before starting FINE.
+% Build exact Stage 2 counts by clamping search windows around the coarse
+% seeds, so the run budget and ETA become exact before starting Stage 2.
 % Also guards against exceeding MAX_RUNS before any fine sweep is run.
 % ==================================================================
-if isempty(coarseSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="FINE"
+if isempty(coarseSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="Stage 2"
     if isfield(checkpointData.payload,'coarseSeedCandidates')
         coarseSeedCandidates = checkpointData.payload.coarseSeedCandidates;
     else
-        error('Checkpoint at FINE stage has no "coarseSeedCandidates". Rerun COARSE.');
+        error('Checkpoint at Stage 2 has no "coarseSeedCandidates". Rerun Stage 1.');
     end
 end
 
-% Exact FINE point count (after clamping to search limits)
+% Exact Stage 2 point count (after clamping to search limits)
 fineTotalPoints = 0;
 for s = 1:height(coarseSeedCandidates)
     goldHeightList = max(min(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   - fineGoldHeightDelta)  : fineGoldHeightStep  : min(max(goldHeightGridNm),  coarseSeedCandidates.h_au_nm(s)   + fineGoldHeightDelta);
@@ -445,35 +445,35 @@ fineTotalRuns = runsPerSearchPoint * fineTotalPoints;
 globalRunTargetEstimate = coarseTotalRuns + fineTotalRuns + superTotalRuns + extraRunsFixed;
 isTotalRunEstimateExact = true;
 
-fprintf('\nSTAGE FINE - EXACT: %d runs (TOP-%d)\n', fineTotalRuns, height(coarseSeedCandidates));
+fprintf('\nSTAGE 2 - EXACT: %d runs (TOP-%d)\n', fineTotalRuns, height(coarseSeedCandidates));
 fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
 if globalRunTargetEstimate > MAX_RUNS
     error('Planned total exceeds %d runs (%d). Adjust deltas/steps/TOPK.', MAX_RUNS, globalRunTargetEstimate);
 end
 
 %% ==================================================================
-%                                 FINE
+%                                 Stage 2
 % ------------------------------------------------------------------
 % For each coarse seed, sweep refined geometry windows and a narrower
 % alpha range. Recompute sensitivity, log ETAs, and checkpoint.
-% Select TOP-K seeds (by |S|) to feed SUPER.
+% Select TOP-K seeds (by |S|) to feed Stage 3.
 % ==================================================================
 fineResultsTable = [];
 superSeedCandidates = [];
 
-if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SUPER","SENSITIVITY FULL","FINAL"]))
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["Stage 3","Stage 4","FINAL"]))
     if isfield(checkpointData.payload,'fineResultsTable'),      fineResultsTable = checkpointData.payload.fineResultsTable; end
     if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
-    % Safety net: rebuild SUPER seeds from fineResultsTable if a partial
-    % checkpoint dropped them, keeping the SUPER run-count planning exact.
+    % Safety net: rebuild Stage 3 seeds from fineResultsTable if a partial
+    % checkpoint dropped them, keeping the Stage 3 run-count planning exact.
     if (isempty(superSeedCandidates) || height(superSeedCandidates)==0) && ~isempty(fineResultsTable)
         superSeedCandidates = selectTopK_single_abs(fineResultsTable, topKFine, 'S_est_deg_per_RIU');
-        warning('SKIP FINE: superSeedCandidates missing in checkpoint -> rebuilt from fineResultsTable.');
+        warning('SKIP Stage 2: superSeedCandidates missing in checkpoint -> rebuilt from fineResultsTable.');
     end
-    fprintf('SKIP FINE -> restored fineResultsTable (rows=%d), superSeedCandidates (rows=%d)\n', ...
+    fprintf('SKIP Stage 2 -> restored fineResultsTable (rows=%d), superSeedCandidates (rows=%d)\n', ...
         size(fineResultsTable,1), height(superSeedCandidates));
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(fineResultsTable, 'FINE', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(fineResultsTable, 'Stage 2', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 else
     fineRows = [];
@@ -482,12 +482,12 @@ else
     stageTimerStart = tic;
 
     finePointIndex = 0;
-    if resumeFromCheckpoint && resumeStageTag=="FINE" && checkpointData.done_points > 0
+    if resumeFromCheckpoint && resumeStageTag=="Stage 2" && checkpointData.done_points > 0
         runsCompletedGlobal = checkpointData.runsCompletedGlobal;
         finePointIndex   = checkpointData.done_points;
         if isfield(checkpointData.payload,'fineRows'), fineRows = checkpointData.payload.fineRows; end
         if isfield(checkpointData.payload,'coarseSeedCandidates'),    coarseSeedCandidates    = checkpointData.payload.coarseSeedCandidates;    end
-        fprintf('>>> FINE resume: skipping %d points already computed.\n', finePointIndex);
+        fprintf('>>> Stage 2 resume: skipping %d points already computed.\n', finePointIndex);
     end
 
     for s = 1:height(coarseSeedCandidates)
@@ -515,7 +515,7 @@ else
                         setParamNm(model, PARAM_HAU, goldHeightList(goldHeightIdx));
 
                             finePointIndex = finePointIndex + 1;
-                            if resumeFromCheckpoint && resumeStageTag=="FINE" && finePointIndex <= checkpointData.done_points
+                            if resumeFromCheckpoint && resumeStageTag=="Stage 2" && finePointIndex <= checkpointData.done_points
                                 continue;
                             end
 
@@ -543,7 +543,7 @@ else
                             sensitivityEstimateFast = fastTrackedEval.sensitivitySlope;
 
                             if PLOT_LIVE
-                                updateLivePlot('FINE', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
+                                updateLivePlot('Stage 2', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
                                     alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
                                     iterationFigureOutputDirectory);
                             end
@@ -557,7 +557,7 @@ else
                             stageRunsCompleted = runsCompletedGlobal - stageRunsStart;
                             [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
                             [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
-                            logline(['FINE   | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
+                            logline(['Stage 2 | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
                                      ' | |TM|=%.5f @ alpha=%.3f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
@@ -568,7 +568,7 @@ else
                             payload = struct('fineRows',fineRows, ...
                                 'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates);
                             pointsSinceCheckpoint = maybe_checkpoint( ...
-                                'FINE', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                                'Stage 2', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
                                 runsCompletedGlobal, pointsSinceCheckpoint, finePointIndex, payload, ...
                                 coarseResultsTable, [], [], []);
                     end
@@ -584,26 +584,26 @@ else
 
     superSeedCandidates = selectTopK_single_abs(fineResultsTable, topKFine, 'S_est_deg_per_RIU');
 
-    save_checkpoint(checkpointFilePath, 'SUPER', runsCompletedGlobal, 0, struct( ...
+    save_checkpoint(checkpointFilePath, 'Stage 3', runsCompletedGlobal, 0, struct( ...
         'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
         'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates));
     write_progress_xlsx(progressWorkbookPath, 'fine', fineResultsTable);
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(fineResultsTable, 'FINE', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(fineResultsTable, 'Stage 2', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 end
 
 %% ==================================================================
-%                     SUPERFINE PLANNING (EXACT)
+%                     Stage 3 PLANNING (EXACT)
 % ------------------------------------------------------------------
-% Compute exact SUPER run counts around each fine seed before launching
+% Compute exact Stage 3 run counts around each fine seed before launching
 % the final refinement stage, keeping the run budget/ETA precise.
 % ==================================================================
-if isempty(superSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="SUPER"
+if isempty(superSeedCandidates) && resumeFromCheckpoint && resumeStageTag=="Stage 3"
     if isfield(checkpointData.payload,'superSeedCandidates')
         superSeedCandidates = checkpointData.payload.superSeedCandidates;
     else
-        error('Checkpoint at SUPER stage has no "superSeedCandidates". Rerun FINE.');
+        error('Checkpoint at Stage 3 has no "superSeedCandidates". Rerun Stage 2.');
     end
 end
 
@@ -617,11 +617,11 @@ for s = 1:height(superSeedCandidates)
 end
 superTotalRuns = runsPerSearchPoint * superTotalPoints;
 
-fprintf('\nSTAGE SUPER - EXACT: %d runs (TOP-%d)\n', superTotalRuns, height(superSeedCandidates));
+fprintf('\nSTAGE 3 - EXACT: %d runs (TOP-%d)\n', superTotalRuns, height(superSeedCandidates));
 fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
 
 %% ==================================================================
-%                             SUPERFINE
+%                             Stage 3
 % ------------------------------------------------------------------
 % Final refinement around the fine seeds with tighter alpha steps.
 % Recompute sensitivity, log ETAs, checkpoint, and pick
@@ -630,12 +630,12 @@ fprintf('GLOBAL TOTAL (EXACT): %d runs\n\n', globalRunTargetEstimate);
 superResultsTable = [];
 bestSensitivityCandidate = table();
 
-if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SENSITIVITY FULL","FINAL"]))
+if resumeFromCheckpoint && any(strcmp(resumeStageTag, ["Stage 4","FINAL"]))
     if isfield(checkpointData.payload,'superResultsTable'), superResultsTable = checkpointData.payload.superResultsTable; end
     if isfield(checkpointData.payload,'bestSensitivityCandidate'), bestSensitivityCandidate = checkpointData.payload.bestSensitivityCandidate; end
-    fprintf('SKIP SUPER -> restored superResultsTable (rows=%d) and best selection.\n', size(superResultsTable,1));
+    fprintf('SKIP Stage 3 -> restored superResultsTable (rows=%d) and best selection.\n', size(superResultsTable,1));
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(superResultsTable, 'SUPER', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(superResultsTable, 'Stage 3', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 else
     superRows = [];
@@ -644,12 +644,12 @@ else
     stageTimerStart = tic;
 
     superPointIndex = 0;
-    if resumeFromCheckpoint && resumeStageTag=="SUPER" && checkpointData.done_points > 0
+    if resumeFromCheckpoint && resumeStageTag=="Stage 3" && checkpointData.done_points > 0
         runsCompletedGlobal = checkpointData.runsCompletedGlobal;
         superPointIndex  = checkpointData.done_points;
         if isfield(checkpointData.payload,'superRows'),  superRows  = checkpointData.payload.superRows;  end
         if isfield(checkpointData.payload,'superSeedCandidates'), superSeedCandidates = checkpointData.payload.superSeedCandidates; end
-        fprintf('>>> SUPER resume: skipping %d points already computed.\n', superPointIndex);
+        fprintf('>>> Stage 3 resume: skipping %d points already computed.\n', superPointIndex);
     end
 
     for s = 1:height(superSeedCandidates)
@@ -676,7 +676,7 @@ else
                         setParamNm(model, PARAM_HAU, goldHeightList(goldHeightIdx));
 
                             superPointIndex = superPointIndex + 1;
-                            if resumeFromCheckpoint && resumeStageTag=="SUPER" && superPointIndex <= checkpointData.done_points
+                            if resumeFromCheckpoint && resumeStageTag=="Stage 3" && superPointIndex <= checkpointData.done_points
                                 continue;
                             end
 
@@ -704,7 +704,7 @@ else
                             sensitivityEstimateFast = fastTrackedEval.sensitivitySlope;
 
                             if PLOT_LIVE
-                                updateLivePlot('SUPER', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
+                                updateLivePlot('Stage 3', domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
                                     alphaGridFastBase, tmokeCurveFastBase, alphaAtPeakFastBase, tmokeAtPeakFastBase, transmissionPlusFastBase, transmissionMinusFastBase, ...
                                     iterationFigureOutputDirectory);
                             end
@@ -718,7 +718,7 @@ else
                             stageRunsCompleted = runsCompletedGlobal - stageRunsStart;
                             [stageCompletionFraction, stageEtaSeconds]   = frac_eta(stageRunsCompleted, stageTotalRuns, toc(stageTimerStart));
                             [globalCompletionFraction, globalEtaSeconds] = frac_eta(runsCompletedGlobal, globalRunTargetEstimate, toc(globalTimerStart));
-                            logline(['SUPER  | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
+                            logline(['Stage 3 | Ldom=%4.0f Lden=%4.0f h_si=%3.0f h_au=%5.1f' ...
                                      ' | |TM|=%.5f @ alpha=%.4f deg | sensitivityEstimateFast=%.4f' ...
                                      ' [Stage %5.1f%% | ETA %s | Global %5.1f%% | ETA %s]\n'], ...
                                 domainPeriodList(domainPeriodIdx), toothWidthList(toothWidthIdx), siliconHeightList(siliconHeightIdx), goldHeightList(goldHeightIdx), ...
@@ -730,7 +730,7 @@ else
                                 'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
                                 'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates);
                             pointsSinceCheckpoint = maybe_checkpoint( ...
-                                'SUPER', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
+                                'Stage 3', checkpointEveryPoints, checkpointFilePath, progressWorkbookPath, ...
                                 runsCompletedGlobal, pointsSinceCheckpoint, superPointIndex, payload, ...
                                 coarseResultsTable, fineResultsTable, [], []);
                     end
@@ -744,24 +744,24 @@ else
          'maxAbsTMOKE_base','alpha_peak_base_deg','TMOKE_at_peak_base', ...
          'alpha_peak_high_deg','S_est_deg_per_RIU'});
 
-    % Final choice within SUPER: only |S| matters.
+    % Final choice within Stage 3: only |S| matters.
     bestSensitivityCandidate = selectTopK_single_abs(superResultsTable, 1, 'S_est_deg_per_RIU');
 
-    fprintf('\n===== BEST (SUPERFINE) =====\n');
+    fprintf('\n===== BEST (Stage 3) =====\n');
     fprintf('Best |S| only:\n'); disp(bestSensitivityCandidate);
 
-    save_checkpoint(checkpointFilePath, 'SENSITIVITY FULL', runsCompletedGlobal, 0, struct( ...
+    save_checkpoint(checkpointFilePath, 'Stage 4', runsCompletedGlobal, 0, struct( ...
         'coarseResultsTable', coarseResultsTable, 'coarseSeedCandidates', coarseSeedCandidates, ...
         'fineResultsTable', fineResultsTable, 'superSeedCandidates', superSeedCandidates, 'superResultsTable', superResultsTable, ...
         'bestSensitivityCandidate', bestSensitivityCandidate));
     write_progress_xlsx(progressWorkbookPath, 'super', superResultsTable);
     if MAKE_PLOTS && SAVE_PHASE_PLOTS
-        saveStageCandidatePlots(superResultsTable, 'SUPER', phaseFigureOutputDirectory, FIG_FORMATS);
+        saveStageCandidatePlots(superResultsTable, 'Stage 3', phaseFigureOutputDirectory, FIG_FORMATS);
     end
 end
 
 %% ==================================================================
-%                 SENSITIVITY FULL: dense curves + tracked sensitivityDense (3 n values)
+%                 Stage 4: dense curves + tracked sensitivityDense (3 n values)
 % ------------------------------------------------------------------
 % Fix geometry to bestSensitivityCandidate and:
 %   - sweep dense alpha for each validationRefractiveIndexList value,
@@ -770,7 +770,7 @@ end
 %   - store dense tables for later export/plots.
 % ==================================================================
 % From here, geometry is fixed to bestSensitivityCandidate.
-if isempty(bestSensitivityCandidate) && resumeFromCheckpoint && any(strcmp(resumeStageTag, ["SENSITIVITY FULL","FINAL"]))
+if isempty(bestSensitivityCandidate) && resumeFromCheckpoint && any(strcmp(resumeStageTag, ["Stage 4","FINAL"]))
     bestSensitivityCandidate = checkpointData.payload.bestSensitivityCandidate;
 end
 
@@ -784,7 +784,7 @@ setParamNm(model, PARAM_LDEN, Lden_best);
 setParamNm(model, PARAM_HSI,  hsi_best);
 setParamNm(model, PARAM_HAU,  hau_best);
 
-% SENSITIVITY FULL reuses the same "follow the same resonance" logic, but here every n
+% Stage 4 reuses the same "follow the same resonance" logic, but here every n
 % is swept over the full dense alpha range so the final plots/export keep
 % the complete TMOKE(alpha) curves.
 validationTrackedEval = evaluateTrackedSensitivityAndCurves( ...
@@ -806,7 +806,7 @@ sensitivityDense = validationTrackedEval.sensitivitySlope;
 
 runsCompletedGlobal = runsCompletedGlobal + 2*numel(validationRefractiveIndexList);
 
-fprintf('\n===== SENSITIVITY FULL (bestSensitivityCandidate) =====\n');
+fprintf('\n===== Stage 4 (bestSensitivityCandidate) =====\n');
 fprintf('Best geom: Ldom=%g | Lden=%g | hsi=%g | hau=%g\n', ...
     Ldom_best, Lden_best, hsi_best, hau_best);
 fprintf('alpha_peak(n) = ['); fprintf(' %.4f', alphaPeakDegreesByN); fprintf(' ]\n');
@@ -884,8 +884,8 @@ if isfile(checkpointFilePath), delete(checkpointFilePath); end
 % Saved to figureOutputDirectory when SAVE_FIGS is true.
 % ==================================================================
 if MAKE_PLOTS
-    % (1) TMOKE(alpha) for each n (SENSITIVITY FULL)
-    figure('Name','(1) TMOKE(alpha) for each n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
+    % (1) TMOKE(alpha) for each n (Stage 4)
+    figure('Name','(1) TMOKE(alpha) for each n (Stage 4)','NumberTitle','off','Color','w');
     hold on; grid on;
     for i = 1:numel(validationRefractiveIndexList)
         plot(alphaGridsByN{i}, tmokeCurvesByN{i}, 'LineWidth', 1.2, 'DisplayName', sprintf('n=%.2f', validationRefractiveIndexList(i)));
@@ -895,7 +895,7 @@ if MAKE_PLOTS
     legend('Location','best');
 
     % (2) alpha_peak vs n + fit
-    figure('Name','(2) alpha_peak vs n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
+    figure('Name','(2) alpha_peak vs n (Stage 4)','NumberTitle','off','Color','w');
     hold on; grid on;
     plot(validationRefractiveIndexList, alphaPeakDegreesByN, 'o', 'LineWidth', 1.5, 'DisplayName','data');
     nfit = linspace(min(validationRefractiveIndexList), max(validationRefractiveIndexList), 100);
@@ -905,7 +905,7 @@ if MAKE_PLOTS
     legend('Location','best');
 
     % (3) |TMOKE| at the tracked peak vs n
-    figure('Name','(3) |TMOKE| at tracked peak vs n (SENSITIVITY FULL)','NumberTitle','off','Color','w');
+    figure('Name','(3) |TMOKE| at tracked peak vs n (Stage 4)','NumberTitle','off','Color','w');
     grid on; hold on;
     plot(validationRefractiveIndexList, trackedTmokeAbsByN, 'o-', 'LineWidth', 1.5);
     xlabel('n'); ylabel('|TMOKE| at tracked peak');
@@ -927,8 +927,8 @@ end
 % and wall-clock time. The detailed log remains in the runlog_* file.
 elapsed_total = toc(globalTimerStart);
 fprintf('\n===== SUMMARY =====\n');
-fprintf('Best |sensitivityEstimateFast| only (SUPER):\n'); disp(bestSensitivityCandidate);
-fprintf('SENSITIVITY FULL @ bestSensitivityCandidate: sensitivityDense ~= %.6f deg/RIU\n', sensitivityDense);
+fprintf('Best |sensitivityEstimateFast| only (Stage 3):\n'); disp(bestSensitivityCandidate);
+fprintf('Stage 4 @ bestSensitivityCandidate: sensitivityDense ~= %.6f deg/RIU\n', sensitivityDense);
 fprintf('Runs done: %d | Elapsed: %s\n', runsCompletedGlobal, fmt_time_long(elapsed_total));
 
 diary off;
@@ -974,7 +974,7 @@ function trackedEval = evaluateTrackedSensitivityAndCurves( ...
 %   - the other n values are solved only on the tracked window around the
 %     reference peak, unless sweepAllNonReferenceCurves=true
 %
-% SENSITIVITY FULL-stage behavior:
+% Stage 4 behavior:
 %   - all n values are swept on the full dense alpha range
 %   - the tracked window is still used when choosing alpha_peak for the
 %     non-reference curves, so plots keep the full curves while the metric
@@ -1408,7 +1408,7 @@ function saveValidationPhasePlots(nList, alphaGridsByN, tmokeCurvesByN, ...
         outDir, formats)
     if ~exist(outDir,'dir'), mkdir(outDir); end
 
-    fig = figure('Name','SENSITIVITY FULL dense tracked curves', ...
+    fig = figure('Name','Stage 4 dense tracked curves', ...
                  'NumberTitle','off','Color','w','Visible','off');
     tiledlayout(fig, 1, 3, 'TileSpacing','compact', 'Padding','compact');
 
@@ -1420,7 +1420,7 @@ function saveValidationPhasePlots(nList, alphaGridsByN, tmokeCurvesByN, ...
     end
     xlabel('\alpha [deg]');
     ylabel('TMOKE');
-    title('SENSITIVITY FULL TMOKE curves');
+    title('Stage 4 TMOKE curves');
     legend('Location','best');
 
     nexttile;
