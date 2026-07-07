@@ -1,9 +1,3 @@
-*.pdf
-*.md
-*.bib
-*.sty
-*.ldf
-*.bst
-*.aux
-*.log
-*.tex
+docs/
+manuscript/
+src/
