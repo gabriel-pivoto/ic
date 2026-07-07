@@ -1,8 +1,8 @@
 clear; clc; close all; format long; tic
 import com.comsol.model.*;
 import com.comsol.model.util.*;
-projectRootDir  = 'D:\Gabriel Pivoto\projetoIC';
-comsolModelFile = fullfile(projectRootDir,'modelosimplificado.mph');
+projectRootDir  = 'YOUR PROJECT ROOT DIRECTORY HERE';
+comsolModelFile = fullfile(projectRootDir,'MagnetoplasmonicNanogratings.mph');
 addpath(genpath(projectRootDir));
 MAX_RUNS = 20000;
 checkpointDirectory   = fullfile(projectRootDir,'checkpoints');
