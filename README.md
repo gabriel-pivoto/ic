@@ -18,19 +18,22 @@ where `alpha_peak` is the incidence angle at which `|TMOKE(alpha)|` is maximal, 
 ```
 ic/
 ├── README.md
-└── sensitivity.m
+├── sensitivity.m
+└── MagnetoplasmonicNanogratings.mph
 ```
+
+`MagnetoplasmonicNanogratings.mph` is the COMSOL model that `sensitivity.m` drives via LiveLink. It is loaded by `comsolModelFile = fullfile(projectRootDir,'MagnetoplasmonicNanogratings.mph')` (line ~5), so keep it next to the project root pointed to by `projectRootDir`.
 
 The rest of the project (other MATLAB scripts, docs, manuscript) exists locally but is out of version control (`.gitignore`: `docs/`, `manuscript/`, `src/`).
 
 ## Requirements
 
 - MATLAB with COMSOL's LiveLink for MATLAB configured (`com.comsol.model.*`).
-- A `.mph` model with:
+- The `MagnetoplasmonicNanogratings.mph` model (included in this repository), which provides:
   - parameters `h_au`, `L_domain`, `l_dente`, `h_si`, `n`;
   - a parametric sweep on `std1` over `alpha` [deg] and `m` (magnetization, `1`/`-1`);
   - numerical Derived Values redirectable to tables `tblTplus` / `tblTminus`, containing angle and total-transmission columns.
-- Set `projectRootDir` (line ~55) and `comsolModelFile` to the local project/`.mph` path.
+- Set `projectRootDir` (line ~4) to the local project path; `comsolModelFile` (line ~5) then resolves to `MagnetoplasmonicNanogratings.mph` inside it.
 
 ## How sensitivity is computed
 
