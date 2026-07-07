@@ -1,8 +1,7 @@
-# Fluxograma detalhado do script MATLAB + COMSOL  
-## 5D Hierarchical Search para otimização de TMOKE e sensibilidade angular
+# Detailed flowchart of the MATLAB + COMSOL script
+## 4D Hierarchical Search for TMOKE and angular-sensitivity optimization
 ---
 
-## Estrutura do repositório
 # sensitivity.m — Angular sensitivity optimization (MATLAB + COMSOL)
 
 4D hierarchical search that drives a COMSOL model to find the geometry that maximizes angular sensitivity
